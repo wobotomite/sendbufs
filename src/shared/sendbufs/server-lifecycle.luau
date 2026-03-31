@@ -2,7 +2,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
-local remotes = require("@shared/sendbufs/remotes")
+local remotes = require("./remotes")
 local read_iter = require("./read-iter")
 local read = require("./read")
 local buffer_writer = require("./buffer-writer")

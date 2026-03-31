@@ -4,7 +4,7 @@ local RunService = game:GetService("RunService")
 local client_lifecycle = require("./client-lifecycle")
 local server_lifecycle = require("./server-lifecycle")
 
-local types = require("@shared/sendbufs/types")
+local types = require("./types")
 local serdes = require("./serdes")
 local constants = require("./constants");
 
