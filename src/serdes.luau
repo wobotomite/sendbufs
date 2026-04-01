@@ -1,3 +1,4 @@
+--!native
 local buffer_writer = require("./buffer-writer")
 
 local alloc = buffer_writer.alloc

@@ -50,7 +50,7 @@ export type t_fn<T, R> = typeof(setmetatable({}::{
 },((RunService.IsServer() and server_function_metatable or client_function_metatable)::never)::fn_comb_mt<T,R>))
 
 
-function connect_listener(listeners: { types.fn_listener }, fn: (...any) -> (),once:boolean?)
+@native function connect_listener(listeners: { types.fn_listener }, fn: (...any) -> (),once:boolean?)
         local t = {fn=fn,once=once};
 		table.insert(listeners, t)
 		return function()
@@ -61,7 +61,7 @@ function connect_listener(listeners: { types.fn_listener }, fn: (...any) -> (),o
 		end
 end
 
-function wait<T>(self:t_event<T>): (T,Player?)
+@native function wait<T>(self:t_event<T>): (T,Player?)
     local coro = coroutine.running();
 	local data,plr;
     connect_listener(self.listeners,function(...)
@@ -72,11 +72,11 @@ function wait<T>(self:t_event<T>): (T,Player?)
 	
     return data,plr;
 end
-function connect<T>(self:t_event<T>, callback:(T)->(),once:boolean?)
+@native function connect<T>(self:t_event<T>, callback:(T)->(),once:boolean?)
     return connect_listener(self.listeners,callback,once);
 end
 
-function to_player_table(t: Player | { Player }): { Player }
+@native function to_player_table(t: Player | { Player }): { Player }
 	if typeof(t) == "table" then
 		return t
 	end
@@ -85,7 +85,7 @@ end
 
 
 --@client only!
-function client_remote_metatable.fire_server<T>(self:t_event<T>,arg:T)
+@native function client_remote_metatable.fire_server<T>(self:t_event<T>,arg:T)
     local write_fn = self.schema.write;
     local fn = if self.type == constants.EVENT_TYPE.RELIABLE
 			then client_lifecycle.send_reliable_packet
@@ -98,7 +98,7 @@ client_remote_metatable.connect = connect;
 table.freeze(client_remote_metatable);
 
 
-function client_function_metatable.invoke<T,R>(self:t_fn<T,R>, arg:T): (boolean,R)
+@native function client_function_metatable.invoke<T,R>(self:t_fn<T,R>, arg:T): (boolean,R)
 	local write_fn = self.schema.write;
 	local read_fn = self.schema_out.read;
 	return client_lifecycle.invoke_request(self.id, write_fn,read_fn,arg);
@@ -110,7 +110,7 @@ table.freeze(client_function_metatable);
 
 
 -- server only!
-function server_remote_metatable.fire_client<T>(self: t_event<T>, plr: Player | { Player }, arg:T): ()
+@native function server_remote_metatable.fire_client<T>(self: t_event<T>, plr: Player | { Player }, arg:T): ()
 		local plr = to_player_table(plr)
 		local write_fn = self.schema.write
 		local fn = if self.type == constants.EVENT_TYPE.RELIABLE then server_lifecycle.send_reliable_packet else server_lifecycle.send_reliable_packet
@@ -118,7 +118,7 @@ function server_remote_metatable.fire_client<T>(self: t_event<T>, plr: Player | 
 			(fn :: never)(plr[i], self.id, write_fn, arg)
 		end
 end
-function server_remote_metatable.fire_all<T>(self: t_event<T>, arg:T): ()
+@native function server_remote_metatable.fire_all<T>(self: t_event<T>, arg:T): ()
 		local plr = Players:GetPlayers();
 		local write_fn = self.schema.write
 		local fn = if self.type == constants.EVENT_TYPE.RELIABLE then server_lifecycle.send_reliable_packet else server_lifecycle.send_reliable_packet
@@ -130,7 +130,7 @@ server_remote_metatable.wait = wait;
 server_remote_metatable.connect = connect;
 table.freeze(server_remote_metatable);
 
-function server_function_metatable.set_callback<T,R>(self:t_fn<T,R>,cb:(arg:T,plr:Player?)->R)
+@native function server_function_metatable.set_callback<T,R>(self:t_fn<T,R>,cb:(arg:T,plr:Player?)->R)
 	if (self.callback) then
 		error("CALLBACK FN ALREADY EXISTS!");
 	end
