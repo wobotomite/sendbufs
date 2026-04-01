@@ -10,6 +10,11 @@ local client = require("@self/client-lifecycle")
 local remotes = require("@self/remotes")
 local metatables = require("@self/metatables")
 local constants = require("@self/constants")
+local middleware = require("@self/middleware")
+
+export type TEvent<T=never> = metatables.t_event<T>
+export type TFunction<T=never,R=never> = metatables.t_fn<T,R>
+export type TReplicated<T=never,R=never> = metatables.t_event<T> | metatables.t_fn<T,R>
 
 do
 	local globalid = 0
@@ -65,5 +70,7 @@ return table.freeze({
 	create_event = create_event,
 	create_unreliable = create_unreliable,
 	create_request = create_request,
+	middleware = middleware.middleware :: <T,R>(evt:metatables.t_event<T> | metatables.t_fn<T,R>, fn: (id:number,plr:Player, b:buffer,refs:{unknown}?)->boolean)->(),
+	global_middleware = middleware.global_middleware :: (fn: (id:number,plr:Player, b:buffer,refs:{unknown}?)->boolean)->(),
 	schema = serdes,
 })

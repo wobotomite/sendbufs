@@ -128,11 +128,9 @@ server_remote_metatable.connect = connect;
 table.freeze(server_remote_metatable);
 
 function server_function_metatable.set_callback<T,R>(self:t_fn<T,R>,cb:(arg:T,plr:Player?)->R)
-	
 	if (self.callback) then
 		error("CALLBACK FN ALREADY EXISTS!");
 	end
-	print("callback set")
 	self.callback = cb;
 end
 

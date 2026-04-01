@@ -11,6 +11,9 @@ local alloc = buffer_writer.alloc
 local u8 = buffer_writer.u8
 
 local dump = require("./dump")
+local logger = require("./logger")
+local middleware = require("./middleware")
+local validate_buffer = require("./validate-buffer")
 
 @native
 function create_super(): buffer_writer.buffer_writer
@@ -52,8 +55,6 @@ function send_unreliable_packet(
 	players_unreliable[to] = buf
 end
 
-
-
 @native
 function start()
 	local reliable = Instance.new("RemoteEvent")
@@ -64,14 +65,18 @@ function start()
 	remote_fn.Name = ".remote_fn"
 
 	remote_fn.OnServerInvoke = function(plr,b,ref)
+		logger.errorif(not validate_buffer(b,ref), "INVALID BUFFER");
 		for nid,val in read_iter("schema", b) do
+			if not middleware.run_middleware_for(nid,plr,b,ref) then
+				continue;
+			end
 			if (remotes[nid]==nil or remotes[nid].kind~="function") then
-				return false,0;
+				logger.orange("INVALID FUNCTION");
+				return false;
 			end
 			local success,res = pcall(remotes[nid].callback,val,plr);
 			if (not success) then 
-				warn(res)
-				return false,1 
+				return false 
 			end;
 			local buf = create_super();
 			remotes[nid].schema_out.write(buf,res);
@@ -79,13 +84,16 @@ function start()
 			return true,r,refs;
 
 		end
-		return false,2;
+		logger.orange("INVALID ID");
+		return false;
 	end
 
 	reliable.OnServerEvent:Connect(function(plr: Player, b, r)
+		logger.errorif(not validate_buffer(b,r), "INVALID BUFFER");
 		read(b, r, plr)
 	end)
 	unreliable.OnServerEvent:Connect(function(plr: Player, b, r)
+		logger.errorif(not validate_buffer(b,r), "INVALID BUFFER");
 		read(b, r, plr)
 	end)
 

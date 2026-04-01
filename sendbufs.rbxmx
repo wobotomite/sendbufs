@@ -11,6 +11,11 @@ local client = require(script:WaitForChild('client-lifecycle'))
 local remotes = require(script:WaitForChild('remotes'))
 local metatables = require(script:WaitForChild('metatables'))
 local constants = require(script:WaitForChild('constants'))
+local middleware = require(script:WaitForChild('middleware'))
+
+export type TEvent<T=never> = metatables.t_event<T>
+export type TFunction<T=never, R=never> = metatables.t_fn<T, R>
+export type TReplicated<T=never, R=never> = metatables.t_event<T> | metatables.t_fn<T, R>
 
 do
     local globalid = 0
@@ -65,6 +70,8 @@ return table.freeze({
     create_event = create_event,
     create_unreliable = create_unreliable,
     create_request = create_request,
+    middleware = middleware.middleware::<T, R>(evt:metatables.t_event<T> | metatables.t_fn<T, R>, fn:(id:number, plr:Player, b:buffer, refs:{unknown}?) -> boolean) -> (),
+    global_middleware = middleware.global_middleware::(fn:(id:number, plr:Player, b:buffer, refs:{unknown}?) -> boolean) -> (),
     schema = serdes,
 })
 ]]></string>
@@ -364,11 +371,13 @@ return function(listeners: {types.fn_listener}, ...)
     for i = 1, s do
         local r = listeners[i]
 
+        if (r == nil) then
+            break
+        end
         if (r.once) then
             table.remove(listeners, i)
         end
 
-        warn(r.fn, 'exists')
         task.defer(r.fn, ...)
     end
 end
@@ -376,6 +385,40 @@ end
       </Properties>
     </Item>
     <Item class="ModuleScript" referent="6">
+      <Properties>
+        <string name="Name">logger</string>
+        <string name="Source"><![CDATA[local fire_listeners = require(script.Parent:WaitForChild('fire-listeners'))
+local template = '[sendbufs]: %s'
+
+function white(...: string)
+    print(template:format(table.concat({...}, ', ')))
+end
+function red(...: string)
+    error(template:format(table.concat({...}, ', ')))
+end
+function orange(...: string)
+    warn(template:format(table.concat({...}, ', ')))
+end
+function handler(err)
+    red(err)
+end
+function errorif(cond: boolean, ...: string)
+    if (cond) then
+        red(...)
+    end
+end
+
+return {
+    errorif = errorif,
+    white = white,
+    red = red,
+    orange = orange,
+    handler = handler,
+}
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="7">
       <Properties>
         <string name="Name">metatables</string>
         <string name="Source"><![CDATA[local Players = game:GetService('Players')
@@ -499,8 +542,6 @@ function server_function_metatable.set_callback<T, R>(
         error('CALLBACK FN ALREADY EXISTS!')
     end
 
-    print('callback set')
-
     self.callback = cb
 end
 
@@ -515,7 +556,62 @@ return table.freeze{
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="7">
+    <Item class="ModuleScript" referent="8">
+      <Properties>
+        <string name="Name">middleware</string>
+        <string name="Source"><![CDATA[local RunService = game:GetService('RunService')
+local remotes = require(script.Parent:WaitForChild('remotes'))
+
+type middleware_fn = (id:number, plr:Player, b:buffer, refs:{unknown}?) -> boolean
+
+local added: {[number]: {middleware_fn}} = {}
+
+function middleware<T, R>(net: any, fn: middleware_fn)
+    local array = added[net.id] or {}
+
+    table.insert(array, fn)
+end
+function global_middleware(fn: middleware_fn)
+    for r in remotes do
+        local array = added[r] or {}
+
+        table.insert(array, fn)
+    end
+end
+function run_middleware_for(
+    id: number,
+    plr: Player,
+    b: buffer,
+    refs: {unknown}?
+)
+    if (not RunService:IsServer()) then
+        return true
+    end
+
+    local array = added[id]
+
+    if not array then
+        return true
+    end
+
+    for _, fn in array do
+        if not fn(id, plr, b, refs) then
+            return false
+        end
+    end
+
+    return true
+end
+
+return {
+    middleware = middleware,
+    global_middleware = global_middleware,
+    run_middleware_for = run_middleware_for,
+}
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="9">
       <Properties>
         <string name="Name">read-iter</string>
         <string name="Source"><![CDATA[local buffer_writer = require(script.Parent:WaitForChild('buffer-writer'))
@@ -553,12 +649,13 @@ return (read_iter::never)::<T...>(reader_prop:string, b:buffer, refs:{unknown}?)
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="8">
+    <Item class="ModuleScript" referent="10">
       <Properties>
         <string name="Name">read</string>
         <string name="Source"><![CDATA[local Players = game:GetService('Players')
 local buffer_writer = require(script.Parent:WaitForChild('buffer-writer'))
 local fire_listeners = require(script.Parent:WaitForChild('fire-listeners'))
+local middleware = require(script.Parent:WaitForChild('middleware'))
 local remotes = require(script.Parent:WaitForChild('remotes'))
 local from = buffer_writer.from
 
@@ -571,7 +668,8 @@ function(b: buffer, refs: {unknown}?, plr: Player?)
     sb.references = refs or {}
 
     while cursor < totalLen do
-        local remo = remotes[buffer.readu8(b, cursor)]
+        local id = buffer.readu8(b, cursor)
+        local remo = remotes[id]
 
         cursor += 1
 
@@ -580,6 +678,10 @@ function(b: buffer, refs: {unknown}?, plr: Player?)
         cursor += nc
 
         if remo.kind == 'event' and remo.listeners ~= nil then
+            if plr and not middleware.run_middleware_for(id, plr, b, refs) then
+                continue
+            end
+
             fire_listeners(remo.listeners, value, plr)
         end
     end
@@ -587,7 +689,7 @@ end
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="9">
+    <Item class="ModuleScript" referent="11">
       <Properties>
         <string name="Name">remotes</string>
         <string name="Source"><![CDATA[type reflist = {any}
@@ -598,7 +700,7 @@ return refs
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="10">
+    <Item class="ModuleScript" referent="12">
       <Properties>
         <string name="Name">serdes</string>
         <string name="Source"><![CDATA[local buffer_writer = require(script.Parent:WaitForChild('buffer-writer'))
@@ -1104,7 +1206,7 @@ return table.freeze({
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="11">
+    <Item class="ModuleScript" referent="13">
       <Properties>
         <string name="Name">server-lifecycle</string>
         <string name="Source"><![CDATA[local Players = game:GetService('Players')
@@ -1117,6 +1219,9 @@ local buffer_writer = require(script.Parent:WaitForChild('buffer-writer'))
 local alloc = buffer_writer.alloc
 local u8 = buffer_writer.u8
 local dump = require(script.Parent:WaitForChild('dump'))
+local logger = require(script.Parent:WaitForChild('logger'))
+local middleware = require(script.Parent:WaitForChild('middleware'))
+local validate_buffer = require(script.Parent:WaitForChild('validate-buffer'))
 
 @native
 function create_super(): buffer_writer.buffer_writer
@@ -1175,17 +1280,22 @@ function start()
 
     remote_fn.Name = '.remote_fn'
     remote_fn.OnServerInvoke = function(plr, b, ref)
+        logger.errorif(not validate_buffer(b, ref), 'INVALID BUFFER')
+
         for nid, val in read_iter('schema', b)do
+            if not middleware.run_middleware_for(nid, plr, b, ref) then
+                continue
+            end
             if (remotes[nid] == nil or remotes[nid].kind ~= 'function') then
-                return false, 0
+                logger.orange('INVALID FUNCTION')
+
+                return false
             end
 
             local success, res = pcall(remotes[nid].callback, val, plr)
 
             if (not success) then
-                warn(res)
-
-                return false, 1
+                return false
             end
 
             local buf = create_super()
@@ -1197,13 +1307,17 @@ function start()
             return true, r, refs
         end
 
-        return false, 2
+        logger.orange('INVALID ID')
+
+        return false
     end
 
     reliable.OnServerEvent:Connect(function(plr: Player, b, r)
+        logger.errorif(not validate_buffer(b, r), 'INVALID BUFFER')
         read(b, r, plr)
     end)
     unreliable.OnServerEvent:Connect(function(plr: Player, b, r)
+        logger.errorif(not validate_buffer(b, r), 'INVALID BUFFER')
         read(b, r, plr)
     end)
 
@@ -1251,12 +1365,21 @@ return {
 ]]></string>
       </Properties>
     </Item>
-    <Item class="ModuleScript" referent="12">
+    <Item class="ModuleScript" referent="14">
       <Properties>
         <string name="Name">types</string>
         <string name="Source"><![CDATA[export type fn_listener = {fn: () -> (), once: boolean?}
 
 return nil
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="15">
+      <Properties>
+        <string name="Name">validate-buffer</string>
+        <string name="Source"><![CDATA[return function(b: any, refs: {unknown}?)
+    return typeof(b) == 'buffer' and buffer.len(b) > 0 and (refs and typeof(refs) == 'table')
+end
 ]]></string>
       </Properties>
     </Item>
