@@ -1,6 +1,6 @@
 # sendbufs
 
-## API
+### API:
 
 ### sendbufs.schema
 ```lua
@@ -86,6 +86,8 @@ ev:set_callback(cb:(T,Player)->R);
 Middleware runs on the server before every listener call (events) and before parsing sent data (functions).
 It cannot modify data and should only be used for filtering.
 
+##### Middleware functions are fired sequentially!
+
 #### example (useful) middleware functions:
 
 ```lua
@@ -124,6 +126,15 @@ local function server_to_client_only(list: {[sendbufs.TEvent]:boolean})
 	end
 end
 
+local function scope_middleware(
+	scope: {[string]:sendbufs.TEvent},
+	middleware:(n:number,plr:Player,b:buffer,refs:{unknown}?)->boolean
+	)
+	for _,ev in scope do
+		sendbufs.middleware(ev,middleware);
+	end
+end
+
 local function print_payload(_,plr,b)
 	print(plr,"sent",buffer.len(b),"bytes");
 	return true;
@@ -133,6 +144,15 @@ end
 
 ```lua
 local network = {
+
+	data_change_requests = {
+		try_eat_food = sendbufs.create_event(sendbufs.STRUCT{
+			food_name = sendbufs.STRING,
+			amount = sendbufs.U16
+		});
+		try_equip_armor = sendbufs.create_event(sendbufs.STRING);
+	}
+
     awesome_event = sendbufs.create_event(sendbufs.schema.STRUCT{
         success = sendbufs.schema.BOOL,
         data = sendbufs.schema.OPTIONAL(sendbufs.schema.ARRAY(sendbufs.schema.U8)),
@@ -140,12 +160,16 @@ local network = {
     server_only = sendbufs.create_event(sendbufs.schema.CFRAME);
 }
 
-global_middleware(server_to_client_only({
+sendbufs.global_middleware(server_to_client_only({
     [network.server_only] = true,
 }));
-global_middleware(print_payload);
-middleware(network.awesome_event,rate_limit(1/24));
-middleware(network.awesome_event,limit_payload(1024));
+
+sendbufs.scope_middleware(network.data_change_requests,rate_limit(1/3));
+sendbufs.middleware(network.awesome_event,rate_limit(1/24));
+
+sendbufs.middleware(network.awesome_event,limit_payload(1024));
+
+sendbufs.global_middleware(print_payload);
 
 return network;
 ```
