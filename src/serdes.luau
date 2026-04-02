@@ -1,25 +1,25 @@
 --!native
-const buffer_writer = require("./buffer-writer")
-const types = require("./types")
+local buffer_writer = require("./buffer-writer")
+local types = require("./types")
 
-const alloc = buffer_writer.alloc
-const dyn_alloc = buffer_writer.dyn_alloc
-const u8 = buffer_writer.u8
-const u16 = buffer_writer.u16
-const u32 = buffer_writer.u32
-const i8 = buffer_writer.i8
-const i16 = buffer_writer.i16
-const i32 = buffer_writer.i32
-const f32 = buffer_writer.f32
-const btrue = buffer_writer.btrue
-const bfalse = buffer_writer.bfalse
-const reference = buffer_writer.reference
-const writestring = buffer_writer.writestring
+local alloc = buffer_writer.alloc
+local dyn_alloc = buffer_writer.dyn_alloc
+local u8 = buffer_writer.u8
+local u16 = buffer_writer.u16
+local u32 = buffer_writer.u32
+local i8 = buffer_writer.i8
+local i16 = buffer_writer.i16
+local i32 = buffer_writer.i32
+local f32 = buffer_writer.f32
+local btrue = buffer_writer.btrue
+local bfalse = buffer_writer.bfalse
+local reference = buffer_writer.reference
+local writestring = buffer_writer.writestring
 
 type serdes_data<T> = types.serdes_data<T>
 
 do
-	const data: serdes_data<boolean> = {
+	local data: serdes_data<boolean> = {
 		read = function(b, o)
 			return (buffer.readu8(b.buff, o) == 1), 1
 		end,
@@ -37,7 +37,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readu8(b.buff, o), 1
 		end,
@@ -51,7 +51,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readi8(b.buff, o), 1
 		end,
@@ -66,7 +66,7 @@ do
 end
 
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readu16(b.buff, o), 2
 		end,
@@ -80,7 +80,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readi16(b.buff, o), 2
 		end,
@@ -95,7 +95,7 @@ do
 end
 
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readu32(b.buff, o), 4
 		end,
@@ -109,7 +109,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readi32(b.buff, o), 4
 		end,
@@ -125,15 +125,15 @@ end
 
 do
 	function S_TUPLE(...: serdes_data<any>)
-		const packed = table.pack(...)
-		const tuple_len = packed.n
-		const data: serdes_data<{ any }> = {
+		local packed = table.pack(...)
+		local tuple_len = packed.n
+		local data: serdes_data<{ any }> = {
 			read = function(b, cursor)
-				const len = buffer.readu8(b.buff, cursor)
-				const array = {}
+				local len = buffer.readu8(b.buff, cursor)
+				local array = {}
 				local arr_cursor = cursor + 1
 				for i = 1, len do
-					const v, len = packed[i].read(b, arr_cursor)
+					local v, len = packed[i].read(b, arr_cursor)
 					array[i] = v
 					arr_cursor += len
 				end
@@ -153,21 +153,21 @@ do
 end
 do
 	function S_ARRAY<T>(t: serdes_data<T>)
-		const read, write = t.read, t.write
-		const data: serdes_data<{ T }> = {
+		local read, write = t.read, t.write
+		local data: serdes_data<{ T }> = {
 			read = function(b, cursor)
-				const len = buffer.readu16(b.buff, cursor)
-				const array = {}
+				local len = buffer.readu16(b.buff, cursor)
+				local array = {}
 				local arr_cursor = cursor + 2
 				for i = 1, len do
-					const v, len = read(b, arr_cursor)
+					local v, len = read(b, arr_cursor)
 					array[i] = v
 					arr_cursor += len
 				end
 				return array, arr_cursor - cursor
 			end,
 			write = function(b, v)
-				const s = #v
+				local s = #v
 				alloc(b, 2)
 				u16(b, s)
 				for i = 1, s do
@@ -179,35 +179,35 @@ do
 	end
 end
 do
-	const map = {}
+	local map = {}
 	function get_struct(template: { [string]: serdes_data<any> })
 		if map[template] ~= nil then
 			return map[template], #map[template]
 		end
-		const converted_struct = {}
+		local converted_struct = {}
 		for i, v in template do
 			converted_struct[#converted_struct + 1] = { index = i, val = v }
 		end
 		table.sort(converted_struct, function(a0, a1): boolean
 			return a0.index > a1.index
 		end)
-		const len = #converted_struct
+		local len = #converted_struct
 		map[template] = converted_struct
 		return converted_struct, len
 	end
 
 	function S_STRUCT(template: { [string]: serdes_data<any> })
-		const ordered, len = get_struct(template)
+		local ordered, len = get_struct(template)
 
 		print(ordered, len, "STRUCT")
-		const data: serdes_data<{ [string]: serdes_data<any> }> = {
+		local data: serdes_data<{ [string]: serdes_data<any> }> = {
 			read = function(buff, cursor)
-				const length = buffer.readu8(buff.buff, cursor)
+				local length = buffer.readu8(buff.buff, cursor)
 				local str_cursor = cursor + 1
-				const struct = {}
+				local struct = {}
 				for i = 1, length do
-					const r = ordered[i]
-					const value, offset = r.val.read(buff, str_cursor)
+					local r = ordered[i]
+					local value, offset = r.val.read(buff, str_cursor)
 					struct[r.index] = value
 					str_cursor += offset
 				end
@@ -217,7 +217,7 @@ do
 				alloc(b, 1)
 				u8(b, len)
 				for i = 1, len do
-					const r = ordered[i]
+					local r = ordered[i]
 					r.val.write(b, v[r.index])
 				end
 			end,
@@ -228,18 +228,18 @@ end
 
 do
 	function S_OPTIONAL<T>(v: serdes_data<T>): serdes_data<T?>
-		const read, write = v.read, v.write
+		local read, write = v.read, v.write
 		return {
 			read = function(b, cursor)
 				if buffer.readu8(b.buff, cursor) == 0 then
 					return nil, 1
 				else
-					const item, length = read(b, cursor + 1)
+					local item, length = read(b, cursor + 1)
 					return item, length + 1
 				end
 			end,
 			write = function(b, value)
-				const exists = value ~= nil
+				local exists = value ~= nil
 				alloc(b, 1)
 				if exists then
 					btrue(b)
@@ -255,9 +255,9 @@ do
 end
 
 do
-	const data: serdes_data<any> = {
+	local data: serdes_data<any> = {
 		read = function(b, cursor)
-			const v = buffer.readu8(b.buff, cursor)
+			local v = buffer.readu8(b.buff, cursor)
 			return b.references[v], 1
 		end,
 		write = function(b, v)
@@ -271,7 +271,7 @@ do
 end
 
 do
-	const data: serdes_data<nil> = {
+	local data: serdes_data<nil> = {
 		read = function()
 			return nil, 0
 		end,
@@ -283,15 +283,15 @@ do
 end
 
 do
-	const bor = bit32.bor
-	const data: serdes_data<vector> = {
+	local bor = bit32.bor
+	local data: serdes_data<vector> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readi16(b.buff, c)
+			local x = buffer.readi16(b.buff, c)
 			c += 2
-			const y = buffer.readi16(b.buff, c)
+			local y = buffer.readi16(b.buff, c)
 			c += 2
-			const z = buffer.readi16(b.buff, c)
+			local z = buffer.readi16(b.buff, c)
 			c += 2
 			return vector.create(x, y, z), c - cursor
 		end,
@@ -309,15 +309,15 @@ do
 end
 
 do
-	const bor = bit32.bor
-	const data: serdes_data<vector> = {
+	local bor = bit32.bor
+	local data: serdes_data<vector> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readi32(b.buff, c)
+			local x = buffer.readi32(b.buff, c)
 			c += 4
-			const y = buffer.readi32(b.buff, c)
+			local y = buffer.readi32(b.buff, c)
 			c += 4
-			const z = buffer.readi32(b.buff, c)
+			local z = buffer.readi32(b.buff, c)
 			c += 4
 			return vector.create(x, y, z), c - cursor
 		end,
@@ -335,14 +335,14 @@ do
 end
 
 do
-	const data: serdes_data<vector> = {
+	local data: serdes_data<vector> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readf32(b.buff, c)
+			local x = buffer.readf32(b.buff, c)
 			c += 4
-			const y = buffer.readf32(b.buff, c)
+			local y = buffer.readf32(b.buff, c)
 			c += 4
-			const z = buffer.readf32(b.buff, c)
+			local z = buffer.readf32(b.buff, c)
 			c += 4
 			return vector.create(x, y, z), c - cursor
 		end,
@@ -360,20 +360,20 @@ do
 end
 
 do
-	const data: serdes_data<CFrame> = {
+	local data: serdes_data<CFrame> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readf32(b.buff, c)
+			local x = buffer.readf32(b.buff, c)
 			c += 4
-			const y = buffer.readf32(b.buff, c)
+			local y = buffer.readf32(b.buff, c)
 			c += 4
-			const z = buffer.readf32(b.buff, c)
+			local z = buffer.readf32(b.buff, c)
 			c += 4
-			const rx = buffer.readf32(b.buff, c)
+			local rx = buffer.readf32(b.buff, c)
 			c += 4
-			const ry = buffer.readf32(b.buff, c)
+			local ry = buffer.readf32(b.buff, c)
 			c += 4
-			const rz = buffer.readf32(b.buff, c)
+			local rz = buffer.readf32(b.buff, c)
 			c += 4
 			return CFrame.Angles(rx, ry, rz) + Vector3.new(x, y, z), c - cursor
 		end,
@@ -397,17 +397,17 @@ do
 end
 
 do
-	const data: serdes_data<string> = {
+	local data: serdes_data<string> = {
 		read = function(b, cursor)
 			local c = cursor
-			const len = buffer.readu16(b.buff, c)
+			local len = buffer.readu16(b.buff, c)
 			c += 2
-			const str = buffer.readstring(b.buff, c, len)
+			local str = buffer.readstring(b.buff, c, len)
 			c += len
 			return str, c - cursor
 		end,
 		write = function(b, v)
-			const len = #v
+			local len = #v
 			alloc(b, 2)
 			u16(b, len)
 			dyn_alloc(b, len)

@@ -1,19 +1,19 @@
-const Players = game:GetService("Players")
+local Players = game:GetService("Players")
 
-const client_lifecycle = require("./client-lifecycle")
-const server_lifecycle = require("./server-lifecycle")
+local client_lifecycle = require("./client-lifecycle")
+local server_lifecycle = require("./server-lifecycle")
 
-const types = require("./types")
+local types = require("./types")
 
-const constants = require("./constants")
+local constants = require("./constants")
 
-const client_remote_metatable = {}
+local client_remote_metatable = {}
 client_remote_metatable.__index = client_remote_metatable
-const server_remote_metatable = {}
+local server_remote_metatable = {}
 server_remote_metatable.__index = server_remote_metatable
-const server_function_metatable = {}
+local server_function_metatable = {}
 server_function_metatable.__index = server_function_metatable
-const client_function_metatable = {}
+local client_function_metatable = {}
 client_function_metatable.__index = client_function_metatable
 
 type t_event<T> = types.t_event<T>
@@ -21,10 +21,10 @@ type t_fn<T, R> = types.t_fn<T, R>
 
 @native
 function connect_listener(listeners: { types.fn_listener }, fn: (...any) -> (), once: boolean?)
-	const t = { fn = fn, once = once }
+	local t = { fn = fn, once = once }
 	table.insert(listeners, t)
 	return function()
-		const i = table.find(listeners, t)
+		local i = table.find(listeners, t)
 		if i ~= nil then
 			table.remove(listeners, i)
 		end
@@ -33,7 +33,7 @@ end
 
 @native
 function wait<T>(self: t_event<T>): (T, Player?)
-	const coro = coroutine.running()
+	local coro = coroutine.running()
 	local data, plr
 	connect_listener(self.listeners, function(...)
 		data, plr = ...
@@ -59,8 +59,8 @@ end
 --@client only!
 @native
 function client_remote_metatable.fire_server<T>(self: t_event<T>, arg: T)
-	const write_fn = self.schema.write
-	const fn = if self.type == constants.EVENT_TYPE.RELIABLE
+	local write_fn = self.schema.write
+	local fn = if self.type == constants.EVENT_TYPE.RELIABLE
 		then client_lifecycle.send_reliable_packet
 		else client_lifecycle.send_unreliable_packet;
 	(fn :: never)(self.id, write_fn, arg)
@@ -72,8 +72,8 @@ table.freeze(client_remote_metatable)
 
 @native
 function client_function_metatable.invoke<T, R>(self: t_fn<T, R>, arg: T): (boolean, R)
-	const write_fn = self.schema.write
-	const read_fn = self.schema_out.read
+	local write_fn = self.schema.write
+	local read_fn = self.schema_out.read
 	return client_lifecycle.invoke_request(self.id, write_fn, read_fn, arg)
 end
 
@@ -82,9 +82,9 @@ table.freeze(client_function_metatable)
 -- server only!
 @native
 function server_remote_metatable.fire_client<T>(self: t_event<T>, plr: Player | { Player }, arg: T): ()
-	const plr = to_player_table(plr)
-	const write_fn = self.schema.write
-	const fn = if self.type == constants.EVENT_TYPE.RELIABLE
+	local plr = to_player_table(plr)
+	local write_fn = self.schema.write
+	local fn = if self.type == constants.EVENT_TYPE.RELIABLE
 		then server_lifecycle.send_reliable_packet
 		else server_lifecycle.send_reliable_packet
 	for i = 1, #plr do
@@ -93,9 +93,9 @@ function server_remote_metatable.fire_client<T>(self: t_event<T>, plr: Player | 
 end
 @native
 function server_remote_metatable.fire_all<T>(self: t_event<T>, arg: T): ()
-	const plr = Players:GetPlayers()
-	const write_fn = self.schema.write
-	const fn = if self.type == constants.EVENT_TYPE.RELIABLE
+	local plr = Players:GetPlayers()
+	local write_fn = self.schema.write
+	local fn = if self.type == constants.EVENT_TYPE.RELIABLE
 		then server_lifecycle.send_reliable_packet
 		else server_lifecycle.send_reliable_packet
 	for i = 1, #plr do

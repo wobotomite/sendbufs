@@ -1,4 +1,4 @@
-const template = "[sendbufs]: %s"
+local template = "[sendbufs]: %s"
 
 function white(...: string)
 	print(template:format(table.concat({ ... }, ", ")))

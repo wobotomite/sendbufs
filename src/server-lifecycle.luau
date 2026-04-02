@@ -1,20 +1,20 @@
-const Players = game:GetService("Players")
-const ReplicatedStorage = game:GetService("ReplicatedStorage")
-const RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
-const remotes = require("./remotes")
-const read_iter = require("./read-iter")
-const read = require("./read")
-const buffer_writer = require("./buffer-writer")
+local remotes = require("./remotes")
+local read_iter = require("./read-iter")
+local read = require("./read")
+local buffer_writer = require("./buffer-writer")
 
-const alloc = buffer_writer.alloc
-const u8 = buffer_writer.u8
+local alloc = buffer_writer.alloc
+local u8 = buffer_writer.u8
 
-const dump = require("./dump")
-const logger = require("./logger")
-const middleware = require("./middleware")
-const types = require("./types")
-const validate_buffer = require("./validate-buffer")
+local dump = require("./dump")
+local logger = require("./logger")
+local middleware = require("./middleware")
+local types = require("./types")
+local validate_buffer = require("./validate-buffer")
 
 @native
 function create_super(): types.buffer_writer
@@ -26,17 +26,17 @@ function create_super(): types.buffer_writer
 	}
 end
 
-const mt = { __mode = "k" }
+local mt = { __mode = "k" }
 
-const players_reliable: { [Player]: types.buffer_writer? } = {}
-const players_unreliable: { [Player]: types.buffer_writer? } = {}
+local players_reliable: { [Player]: types.buffer_writer? } = {}
+local players_unreliable: { [Player]: types.buffer_writer? } = {}
 
 setmetatable(players_reliable, mt)
 setmetatable(players_unreliable, mt)
 
 @native
 function send_reliable_packet(to: Player, id: number, writer: (buf: types.buffer_writer, data: any) -> (), data: any)
-	const buf = players_reliable[to] or create_super()
+	local buf = players_reliable[to] or create_super()
 	alloc(buf, 2)
 	u8(buf, id)
 	writer(buf, data)
@@ -44,7 +44,7 @@ function send_reliable_packet(to: Player, id: number, writer: (buf: types.buffer
 end
 @native
 function send_unreliable_packet(to: Player, id: number, writer: (buf: types.buffer_writer, data: any) -> (), data: any)
-	const buf = players_unreliable[to] or create_super()
+	local buf = players_unreliable[to] or create_super()
 	alloc(buf, 2)
 	u8(buf, id)
 	writer(buf, data)
@@ -53,11 +53,11 @@ end
 
 @native
 function start()
-	const reliable = Instance.new("RemoteEvent")
+	local reliable = Instance.new("RemoteEvent")
 	reliable.Name = ".reliable"
-	const unreliable = Instance.new("UnreliableRemoteEvent")
+	local unreliable = Instance.new("UnreliableRemoteEvent")
 	unreliable.Name = ".unreliable"
-	const remote_fn = Instance.new("RemoteFunction")
+	local remote_fn = Instance.new("RemoteFunction")
 	remote_fn.Name = ".remote_fn"
 
 	remote_fn.OnServerInvoke = function(plr, b, ref)
@@ -66,19 +66,19 @@ function start()
 			if not middleware.run_middleware_for(nid, plr, b, ref) then
 				continue
 			end
-			const rm = remotes[nid]
+			local rm = remotes[nid]
 			if rm == nil or rm.kind ~= "function" then
 				logger.orange("INVALID FUNCTION")
 				return false
 			end
-			const rm: types.t_fn<any, any> = rm
-			const success, res = pcall(rm.callback :: never, val, plr)
+			local rm: types.t_fn<any, any> = rm
+			local success, res = pcall(rm.callback :: never, val, plr)
 			if not success then
 				return false
 			end
-			const buf = create_super()
+			local buf = create_super()
 			rm.schema_out.write(buf, res)
-			const r, refs = dump(buf)
+			local r, refs = dump(buf)
 			return true, r, refs
 		end
 		logger.orange("INVALID ID")
@@ -101,18 +101,18 @@ function start()
 	RunService.Heartbeat:Connect(function()
 		for _, plr in Players:GetPlayers() do
 			do
-				const buf = players_reliable[plr]
+				local buf = players_reliable[plr]
 				if buf ~= nil and buf.cursor > 0 then
-					const dumpBuffer, references = dump(buf)
+					local dumpBuffer, references = dump(buf)
 					reliable:FireClient(plr, dumpBuffer, references)
 					buf.cursor = 0
 					table.clear(buf.references)
 				end
 			end
 			do
-				const buf = players_unreliable[plr]
+				local buf = players_unreliable[plr]
 				if buf ~= nil and buf.cursor > 0 then
-					const dumpBuffer, references = dump(buf)
+					local dumpBuffer, references = dump(buf)
 					unreliable:FireClient(plr, dumpBuffer, references)
 					buf.cursor = 0
 					table.clear(buf.references)

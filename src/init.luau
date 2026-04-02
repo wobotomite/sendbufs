@@ -1,17 +1,16 @@
+local RunService = game:GetService("RunService")
 
-const RunService = game:GetService("RunService")
+local serdes = require("@self/serdes")
 
-const serdes = require("@self/serdes")
+local is_server = RunService:IsServer()
 
-const is_server = RunService:IsServer()
-
-const server = require("@self/server-lifecycle")
-const client = require("@self/client-lifecycle")
-const remotes = require("@self/remotes")
-const metatables = require("@self/metatables")
-const constants = require("@self/constants")
-const middleware = require("@self/middleware")
-const types = require("@self/types")
+local server = require("@self/server-lifecycle")
+local client = require("@self/client-lifecycle")
+local remotes = require("@self/remotes")
+local metatables = require("@self/metatables")
+local constants = require("@self/constants")
+local middleware = require("@self/middleware")
+local types = require("@self/types")
 
 export type TEvent<T = never> = types.t_event<T>
 export type TFunction<T = never, R = never> = types.t_fn<T, R>

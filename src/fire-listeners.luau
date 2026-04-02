@@ -1,8 +1,8 @@
-const types = require("./types")
+local types = require("./types")
 return function(listeners: { types.fn_listener }, ...)
-	const s = #listeners
+	local s = #listeners
 	for i = 1, s do
-		const r = listeners[i]
+		local r = listeners[i]
 		if r == nil then
 			break
 		end

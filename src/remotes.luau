@@ -1,5 +1,5 @@
-const types = require("./types")
+local types = require("./types")
 
 type reflist = { types.t_event<never> | types.t_fn<never, never> }
-const refs: reflist = {}
+local refs: reflist = {}
 return refs
