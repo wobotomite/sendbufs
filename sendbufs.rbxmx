@@ -2,20 +2,19 @@
   <Item class="ModuleScript" referent="0">
     <Properties>
       <string name="Name">sendbufs</string>
-      <string name="Source"><![CDATA[
-const RunService = game:GetService("RunService")
+      <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
 
-const serdes = require("@self/serdes")
+local serdes = require("@self/serdes")
 
-const is_server = RunService:IsServer()
+local is_server = RunService:IsServer()
 
-const server = require("@self/server-lifecycle")
-const client = require("@self/client-lifecycle")
-const remotes = require("@self/remotes")
-const metatables = require("@self/metatables")
-const constants = require("@self/constants")
-const middleware = require("@self/middleware")
-const types = require("@self/types")
+local server = require("@self/server-lifecycle")
+local client = require("@self/client-lifecycle")
+local remotes = require("@self/remotes")
+local metatables = require("@self/metatables")
+local constants = require("@self/constants")
+local middleware = require("@self/middleware")
+local types = require("@self/types")
 
 export type TEvent<T = never> = types.t_event<T>
 export type TFunction<T = never, R = never> = types.t_fn<T, R>
@@ -86,7 +85,7 @@ return table.freeze({
     <Item class="ModuleScript" referent="1">
       <Properties>
         <string name="Name">buffer-writer</string>
-        <string name="Source"><![CDATA[const types = require("./types")
+        <string name="Source"><![CDATA[local types = require("./types")
 type buffer_writer = types.buffer_writer
 
 function create(): buffer_writer
@@ -99,8 +98,8 @@ function create(): buffer_writer
 end
 
 function from(b: buffer)
-	const len = buffer.len(b)
-	const nb: buffer_writer = {
+	local len = buffer.len(b)
+	local nb: buffer_writer = {
 		buff = buffer.create(len),
 		size = len,
 		cursor = 0,
@@ -115,7 +114,7 @@ function alloc(buf: buffer_writer, bytes: number)
 		return
 	end
 	buf.size = math.floor(buf.size * 1.5)
-	const newBuffer = buffer.create(buf.size)
+	local newBuffer = buffer.create(buf.size)
 	buffer.copy(newBuffer, 0, buf.buff)
 	buf.buff = newBuffer
 end
@@ -123,7 +122,7 @@ function dyn_alloc(buf: buffer_writer, bytes: number)
 	while buf.cursor + bytes > buf.size do
 		buf.size = math.floor(buf.size * 1.5)
 	end
-	const newBuffer = buffer.create(buf.size)
+	local newBuffer = buffer.create(buf.size)
 	buffer.copy(newBuffer, 0, buf.buff)
 	buf.buff = newBuffer
 end
@@ -140,7 +139,7 @@ end
 
 function reference(buf: buffer_writer, value: any)
 	table.insert(buf.references, value)
-	const index = #buf.references
+	local index = #buf.references
 	buffer.writeu8(buf.buff, buf.cursor, index)
 	buf.cursor += 1
 end
@@ -220,20 +219,20 @@ return table.freeze({
     <Item class="ModuleScript" referent="2">
       <Properties>
         <string name="Name">client-lifecycle</string>
-        <string name="Source"><![CDATA[const Players = game:GetService("Players")
-const ReplicatedStorage = game:GetService("ReplicatedStorage")
-const RunService = game:GetService("RunService")
+        <string name="Source"><![CDATA[local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
-const read_iter = require("./read-iter")
-const buffer_writer = require("./buffer-writer")
+local read_iter = require("./read-iter")
+local buffer_writer = require("./buffer-writer")
 
-const alloc = buffer_writer.alloc
-const u8 = buffer_writer.u8
-const u16 = buffer_writer.u16
+local alloc = buffer_writer.alloc
+local u8 = buffer_writer.u8
+local u16 = buffer_writer.u16
 
-const dump = require("./dump")
-const read = require("./read")
-const types = require("./types")
+local dump = require("./dump")
+local read = require("./read")
+local types = require("./types")
 
 @native
 function create_super(): types.buffer_writer
@@ -245,8 +244,8 @@ function create_super(): types.buffer_writer
 	}
 end
 
-const payload_reliable = create_super()
-const payload_unreliable = create_super()
+local payload_reliable = create_super()
+local payload_unreliable = create_super()
 
 @native
 function send_reliable_packet(id: number, writer: (buf: types.buffer_writer, data: any) -> (), data: any)
@@ -268,16 +267,16 @@ function invoke_request(
 	reader: (buf: types.buffer_writer, cursor: number) -> any,
 	data: any
 ): (boolean, any)
-	const buf = create_super()
+	local buf = create_super()
 
 	alloc(buf, 1)
 	u8(buf, id)
 	writer(buf, data)
 
-	const remote_fn: RemoteFunction = ReplicatedStorage:WaitForChild(".remote_fn", math.huge)
-	const success, nbuf, refs = remote_fn:InvokeServer(dump(buf))
+	local remote_fn: RemoteFunction = ReplicatedStorage:WaitForChild(".remote_fn", math.huge)
+	local success, nbuf, refs = remote_fn:InvokeServer(dump(buf))
 	if success then
-		const bc = buffer_writer.from(nbuf)
+		local bc = buffer_writer.from(nbuf)
 		bc.references = refs
 		return true, reader(bc, 0)
 	end
@@ -287,20 +286,20 @@ end
 
 @native
 function start()
-	const reliable: RemoteEvent = ReplicatedStorage:WaitForChild(".reliable", math.huge)
+	local reliable: RemoteEvent = ReplicatedStorage:WaitForChild(".reliable", math.huge)
 	reliable.OnClientEvent:Connect(read)
-	const unreliable: UnreliableRemoteEvent = ReplicatedStorage:WaitForChild(".unreliable", math.huge)
+	local unreliable: UnreliableRemoteEvent = ReplicatedStorage:WaitForChild(".unreliable", math.huge)
 	unreliable.OnClientEvent:Connect(read)
 
 	RunService.Heartbeat:Connect(function()
 		if payload_reliable.cursor > 0 then
-			const dump, refs = dump(payload_reliable)
+			local dump, refs = dump(payload_reliable)
 			reliable:FireServer(dump, refs)
 			payload_reliable.cursor = 0
 			table.clear(payload_reliable.references)
 		end
 		if payload_unreliable.cursor > 0 then
-			const b, r = dump(payload_unreliable)
+			local b, r = dump(payload_unreliable)
 			unreliable:FireServer(b, r)
 			payload_unreliable.cursor = 0
 			table.clear(payload_unreliable.references)
@@ -320,12 +319,12 @@ return {
     <Item class="ModuleScript" referent="3">
       <Properties>
         <string name="Name">constants</string>
-        <string name="Source"><![CDATA[const EVENT_TYPE = table.freeze({
+        <string name="Source"><![CDATA[local EVENT_TYPE = table.freeze({
 	RELIABLE = 0,
 	UNRELIABLE = 1,
 })
 
-const FUNCTION_STATUS = table.freeze({
+local FUNCTION_STATUS = table.freeze({
 	IN_PROGRESS = 2,
 	PASS = 1,
 	FAIL = 0,
@@ -341,10 +340,10 @@ return {
     <Item class="ModuleScript" referent="4">
       <Properties>
         <string name="Name">dump</string>
-        <string name="Source"><![CDATA[const types = require("./types")
+        <string name="Source"><![CDATA[local types = require("./types")
 return @native function(b: types.buffer_writer): (buffer, { unknown }?)
-	const cursor = b.cursor
-	const dumpBuffer = buffer.create(cursor)
+	local cursor = b.cursor
+	local dumpBuffer = buffer.create(cursor)
 	buffer.copy(dumpBuffer, 0, b.buff, 0, cursor)
 	return dumpBuffer, if #b.references > 0 then b.references else nil
 end
@@ -354,11 +353,11 @@ end
     <Item class="ModuleScript" referent="5">
       <Properties>
         <string name="Name">fire-listeners</string>
-        <string name="Source"><![CDATA[const types = require("./types")
+        <string name="Source"><![CDATA[local types = require("./types")
 return function(listeners: { types.fn_listener }, ...)
-	const s = #listeners
+	local s = #listeners
 	for i = 1, s do
-		const r = listeners[i]
+		local r = listeners[i]
 		if r == nil then
 			break
 		end
@@ -374,7 +373,7 @@ end
     <Item class="ModuleScript" referent="6">
       <Properties>
         <string name="Name">logger</string>
-        <string name="Source"><![CDATA[const template = "[sendbufs]: %s"
+        <string name="Source"><![CDATA[local template = "[sendbufs]: %s"
 
 function white(...: string)
 	print(template:format(table.concat({ ... }, ", ")))
@@ -411,22 +410,22 @@ return {
     <Item class="ModuleScript" referent="7">
       <Properties>
         <string name="Name">metatables</string>
-        <string name="Source"><![CDATA[const Players = game:GetService("Players")
+        <string name="Source"><![CDATA[local Players = game:GetService("Players")
 
-const client_lifecycle = require("./client-lifecycle")
-const server_lifecycle = require("./server-lifecycle")
+local client_lifecycle = require("./client-lifecycle")
+local server_lifecycle = require("./server-lifecycle")
 
-const types = require("./types")
+local types = require("./types")
 
-const constants = require("./constants")
+local constants = require("./constants")
 
-const client_remote_metatable = {}
+local client_remote_metatable = {}
 client_remote_metatable.__index = client_remote_metatable
-const server_remote_metatable = {}
+local server_remote_metatable = {}
 server_remote_metatable.__index = server_remote_metatable
-const server_function_metatable = {}
+local server_function_metatable = {}
 server_function_metatable.__index = server_function_metatable
-const client_function_metatable = {}
+local client_function_metatable = {}
 client_function_metatable.__index = client_function_metatable
 
 type t_event<T> = types.t_event<T>
@@ -434,10 +433,10 @@ type t_fn<T, R> = types.t_fn<T, R>
 
 @native
 function connect_listener(listeners: { types.fn_listener }, fn: (...any) -> (), once: boolean?)
-	const t = { fn = fn, once = once }
+	local t = { fn = fn, once = once }
 	table.insert(listeners, t)
 	return function()
-		const i = table.find(listeners, t)
+		local i = table.find(listeners, t)
 		if i ~= nil then
 			table.remove(listeners, i)
 		end
@@ -446,7 +445,7 @@ end
 
 @native
 function wait<T>(self: t_event<T>): (T, Player?)
-	const coro = coroutine.running()
+	local coro = coroutine.running()
 	local data, plr
 	connect_listener(self.listeners, function(...)
 		data, plr = ...
@@ -472,8 +471,8 @@ end
 --@client only!
 @native
 function client_remote_metatable.fire_server<T>(self: t_event<T>, arg: T)
-	const write_fn = self.schema.write
-	const fn = if self.type == constants.EVENT_TYPE.RELIABLE
+	local write_fn = self.schema.write
+	local fn = if self.type == constants.EVENT_TYPE.RELIABLE
 		then client_lifecycle.send_reliable_packet
 		else client_lifecycle.send_unreliable_packet;
 	(fn :: never)(self.id, write_fn, arg)
@@ -485,8 +484,8 @@ table.freeze(client_remote_metatable)
 
 @native
 function client_function_metatable.invoke<T, R>(self: t_fn<T, R>, arg: T): (boolean, R)
-	const write_fn = self.schema.write
-	const read_fn = self.schema_out.read
+	local write_fn = self.schema.write
+	local read_fn = self.schema_out.read
 	return client_lifecycle.invoke_request(self.id, write_fn, read_fn, arg)
 end
 
@@ -495,9 +494,9 @@ table.freeze(client_function_metatable)
 -- server only!
 @native
 function server_remote_metatable.fire_client<T>(self: t_event<T>, plr: Player | { Player }, arg: T): ()
-	const plr = to_player_table(plr)
-	const write_fn = self.schema.write
-	const fn = if self.type == constants.EVENT_TYPE.RELIABLE
+	local plr = to_player_table(plr)
+	local write_fn = self.schema.write
+	local fn = if self.type == constants.EVENT_TYPE.RELIABLE
 		then server_lifecycle.send_reliable_packet
 		else server_lifecycle.send_reliable_packet
 	for i = 1, #plr do
@@ -506,9 +505,9 @@ function server_remote_metatable.fire_client<T>(self: t_event<T>, plr: Player | 
 end
 @native
 function server_remote_metatable.fire_all<T>(self: t_event<T>, arg: T): ()
-	const plr = Players:GetPlayers()
-	const write_fn = self.schema.write
-	const fn = if self.type == constants.EVENT_TYPE.RELIABLE
+	local plr = Players:GetPlayers()
+	local write_fn = self.schema.write
+	local fn = if self.type == constants.EVENT_TYPE.RELIABLE
 		then server_lifecycle.send_reliable_packet
 		else server_lifecycle.send_reliable_packet
 	for i = 1, #plr do
@@ -541,75 +540,75 @@ return table.freeze({
     <Item class="ModuleScript" referent="8">
       <Properties>
         <string name="Name">middleware</string>
-        <string name="Source">const RunService = game:GetService("RunService")
+        <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
 
-const remotes = require("./remotes")
+local remotes = require("./remotes")
 
-type middleware_fn = (id:number,plr:Player,b:buffer,refs:{unknown}?)->boolean
+type middleware_fn = (id: number, plr: Player, b: buffer, refs: { unknown }?) -> boolean
 
-const added: {[number]:{middleware_fn}} = {}
+local added: { [number]: { middleware_fn } } = {}
 
-function middleware&lt;T,R>(net:any, fn:middleware_fn)
-    const array = added[net.id] or {};
-    table.insert(array,fn);
-    added[net.id] = array;
+function middleware<T, R>(net: any, fn: middleware_fn)
+	local array = added[net.id] or {}
+	table.insert(array, fn)
+	added[net.id] = array
 end
 
-function global_middleware(fn:middleware_fn)
-    for r in remotes do
-        const array = added[r] or {};
-        table.insert(array,fn);
-        added[r] = array;
-    end
+function global_middleware(fn: middleware_fn)
+	for r in remotes do
+		local array = added[r] or {}
+		table.insert(array, fn)
+		added[r] = array
+	end
 end
 
-function run_middleware_for(id:number,plr:Player,b:buffer,refs:{unknown}?)
-    if (not RunService:IsServer()) then
-        return true;
-    end
-    const array = added[id];
-    if not array then
-        return true;
-    end
-    for _,fn in array do
-        if not fn(id,plr,b,refs) then
-            return false;
-        end
-    end
-    return true;
+function run_middleware_for(id: number, plr: Player, b: buffer, refs: { unknown }?)
+	if not RunService:IsServer() then
+		return true
+	end
+	local array = added[id]
+	if not array then
+		return true
+	end
+	for _, fn in array do
+		if not fn(id, plr, b, refs) then
+			return false
+		end
+	end
+	return true
 end
 
 return {
-    middleware = middleware,
-    global_middleware = global_middleware,
-    run_middleware_for=run_middleware_for,
-
-}</string>
+	middleware = middleware,
+	global_middleware = global_middleware,
+	run_middleware_for = run_middleware_for,
+}
+]]></string>
       </Properties>
     </Item>
     <Item class="ModuleScript" referent="9">
       <Properties>
         <string name="Name">read-iter</string>
-        <string name="Source"><![CDATA[const buffer_writer = require("./buffer-writer")
+        <string name="Source"><![CDATA[local buffer_writer = require("./buffer-writer")
 
-const remotes = require("./remotes")
+local remotes = require("./remotes")
 
-const from = buffer_writer.from
+local from = buffer_writer.from
 
 @native
 function read_iter(reader_prop: "schema" | "schema_out", b: buffer, refs: { unknown }?)
 	local cursor = 0
-	const totalLen = buffer.len(b)
-	const sb = from(b)
+	local totalLen = buffer.len(b)
+	local sb = from(b)
 	sb.references = refs or {}
 	return function()
 		if cursor >= totalLen then
 			return
 		end
-		const rid = buffer.readu8(b, cursor)
-		const remo = remotes[rid]
+		local rid = buffer.readu8(b, cursor)
+		local remo = remotes[rid]
 		cursor += 1
-		const value, nc = remo[reader_prop].read(sb, cursor)
+		local value, nc = remo[reader_prop].read(sb, cursor)
 		cursor += nc
 		return rid, value
 	end
@@ -624,24 +623,24 @@ return (
     <Item class="ModuleScript" referent="10">
       <Properties>
         <string name="Name">read</string>
-        <string name="Source"><![CDATA[const buffer_writer = require("./buffer-writer")
-const fire_listeners = require("./fire-listeners")
-const middleware = require("./middleware")
-const remotes = require("./remotes")
-const types = require("./types")
+        <string name="Source"><![CDATA[local buffer_writer = require("./buffer-writer")
+local fire_listeners = require("./fire-listeners")
+local middleware = require("./middleware")
+local remotes = require("./remotes")
+local types = require("./types")
 
-const from = buffer_writer.from
+local from = buffer_writer.from
 
 return @native function(b: buffer, refs: { unknown }?, plr: Player?)
 	local cursor = 0
-	const totalLen = buffer.len(b)
-	const sb = from(b)
+	local totalLen = buffer.len(b)
+	local sb = from(b)
 	sb.references = refs or {}
 	while cursor < totalLen do
-		const id = buffer.readu8(b, cursor)
-		const remo = remotes[id]
+		local id = buffer.readu8(b, cursor)
+		local remo = remotes[id]
 		cursor += 1
-		const value, nc = (remo.schema.read :: (b: types.buffer_writer, c: number) -> (never, number))(sb, cursor)
+		local value, nc = (remo.schema.read :: (b: types.buffer_writer, c: number) -> (never, number))(sb, cursor)
 		cursor += nc
 		if remo.kind == "event" and remo.listeners ~= nil then
 			if plr and not middleware.run_middleware_for(id, plr, b, refs) then
@@ -657,10 +656,10 @@ end
     <Item class="ModuleScript" referent="11">
       <Properties>
         <string name="Name">remotes</string>
-        <string name="Source"><![CDATA[const types = require("./types")
+        <string name="Source"><![CDATA[local types = require("./types")
 
 type reflist = { types.t_event<never> | types.t_fn<never, never> }
-const refs: reflist = {}
+local refs: reflist = {}
 return refs
 ]]></string>
       </Properties>
@@ -669,27 +668,27 @@ return refs
       <Properties>
         <string name="Name">serdes</string>
         <string name="Source"><![CDATA[--!native
-const buffer_writer = require("./buffer-writer")
-const types = require("./types")
+local buffer_writer = require("./buffer-writer")
+local types = require("./types")
 
-const alloc = buffer_writer.alloc
-const dyn_alloc = buffer_writer.dyn_alloc
-const u8 = buffer_writer.u8
-const u16 = buffer_writer.u16
-const u32 = buffer_writer.u32
-const i8 = buffer_writer.i8
-const i16 = buffer_writer.i16
-const i32 = buffer_writer.i32
-const f32 = buffer_writer.f32
-const btrue = buffer_writer.btrue
-const bfalse = buffer_writer.bfalse
-const reference = buffer_writer.reference
-const writestring = buffer_writer.writestring
+local alloc = buffer_writer.alloc
+local dyn_alloc = buffer_writer.dyn_alloc
+local u8 = buffer_writer.u8
+local u16 = buffer_writer.u16
+local u32 = buffer_writer.u32
+local i8 = buffer_writer.i8
+local i16 = buffer_writer.i16
+local i32 = buffer_writer.i32
+local f32 = buffer_writer.f32
+local btrue = buffer_writer.btrue
+local bfalse = buffer_writer.bfalse
+local reference = buffer_writer.reference
+local writestring = buffer_writer.writestring
 
 type serdes_data<T> = types.serdes_data<T>
 
 do
-	const data: serdes_data<boolean> = {
+	local data: serdes_data<boolean> = {
 		read = function(b, o)
 			return (buffer.readu8(b.buff, o) == 1), 1
 		end,
@@ -707,7 +706,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readu8(b.buff, o), 1
 		end,
@@ -721,7 +720,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readi8(b.buff, o), 1
 		end,
@@ -736,7 +735,7 @@ do
 end
 
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readu16(b.buff, o), 2
 		end,
@@ -750,7 +749,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readi16(b.buff, o), 2
 		end,
@@ -765,7 +764,7 @@ do
 end
 
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readu32(b.buff, o), 4
 		end,
@@ -779,7 +778,7 @@ do
 	end
 end
 do
-	const data: serdes_data<number> = {
+	local data: serdes_data<number> = {
 		read = function(b, o)
 			return buffer.readi32(b.buff, o), 4
 		end,
@@ -795,15 +794,15 @@ end
 
 do
 	function S_TUPLE(...: serdes_data<any>)
-		const packed = table.pack(...)
-		const tuple_len = packed.n
-		const data: serdes_data<{ any }> = {
+		local packed = table.pack(...)
+		local tuple_len = packed.n
+		local data: serdes_data<{ any }> = {
 			read = function(b, cursor)
-				const len = buffer.readu8(b.buff, cursor)
-				const array = {}
+				local len = buffer.readu8(b.buff, cursor)
+				local array = {}
 				local arr_cursor = cursor + 1
 				for i = 1, len do
-					const v, len = packed[i].read(b, arr_cursor)
+					local v, len = packed[i].read(b, arr_cursor)
 					array[i] = v
 					arr_cursor += len
 				end
@@ -823,21 +822,21 @@ do
 end
 do
 	function S_ARRAY<T>(t: serdes_data<T>)
-		const read, write = t.read, t.write
-		const data: serdes_data<{ T }> = {
+		local read, write = t.read, t.write
+		local data: serdes_data<{ T }> = {
 			read = function(b, cursor)
-				const len = buffer.readu16(b.buff, cursor)
-				const array = {}
+				local len = buffer.readu16(b.buff, cursor)
+				local array = {}
 				local arr_cursor = cursor + 2
 				for i = 1, len do
-					const v, len = read(b, arr_cursor)
+					local v, len = read(b, arr_cursor)
 					array[i] = v
 					arr_cursor += len
 				end
 				return array, arr_cursor - cursor
 			end,
 			write = function(b, v)
-				const s = #v
+				local s = #v
 				alloc(b, 2)
 				u16(b, s)
 				for i = 1, s do
@@ -849,35 +848,113 @@ do
 	end
 end
 do
-	const map = {}
+	local function get_key_count<K, V>(v: { [K]: V })
+		local count = 0
+		for i in v do
+			count += 1
+		end
+		return count
+	end
+
+	function S_MAP<K, V>(k: serdes_data<K>, v: serdes_data<V>)
+		local kread, kwrite = k.read, k.write
+		local vread, vwrite = v.read, v.write
+
+		local data: serdes_data<{ [K]: V }> = {
+			read = function(b, cursor)
+				local len = buffer.readu16(b.buff, cursor)
+				local map = {}
+				local map_cursor = cursor + 2
+				for i = 1, len do
+					local k, klen = kread(b, map_cursor)
+					map_cursor += klen
+					local v, vlen = vread(b, map_cursor)
+					map_cursor += vlen
+					map[k] = v
+				end
+				return map, map_cursor - cursor
+			end,
+			write = function(b, map)
+				u16(b, get_key_count(map))
+				for i, v in map do
+					kwrite(b, i)
+					vwrite(b, v)
+				end
+			end,
+		}
+		return data
+	end
+end
+
+do
+	local function get_set_key_count<K>(set: { [K]: boolean })
+		local count = 0
+		for i, v in set do
+			if v then
+				count += 1
+			end
+		end
+		return count
+	end
+
+	function S_SET<K>(k: serdes_data<K>)
+		local kread, kwrite = k.read, k.write
+
+		local data: serdes_data<{ [K]: boolean }> = {
+			read = function(b, cursor)
+				local len = buffer.readu16(b.buff, cursor)
+				local map = {}
+				local map_cursor = cursor + 2
+				for i = 1, len do
+					local k, klen = kread(b, map_cursor)
+					map_cursor += klen
+					map[k] = true
+				end
+				return map, map_cursor - cursor
+			end,
+			write = function(b, set)
+				u16(b, get_set_key_count(set))
+				for i, v in set do
+					if v then
+						kwrite(b, i)
+					end
+				end
+			end,
+		}
+		return data
+	end
+end
+
+do
+	local map = {}
 	function get_struct(template: { [string]: serdes_data<any> })
 		if map[template] ~= nil then
 			return map[template], #map[template]
 		end
-		const converted_struct = {}
+		local converted_struct = {}
 		for i, v in template do
 			converted_struct[#converted_struct + 1] = { index = i, val = v }
 		end
 		table.sort(converted_struct, function(a0, a1): boolean
 			return a0.index > a1.index
 		end)
-		const len = #converted_struct
+		local len = #converted_struct
 		map[template] = converted_struct
 		return converted_struct, len
 	end
 
 	function S_STRUCT(template: { [string]: serdes_data<any> })
-		const ordered, len = get_struct(template)
+		local ordered, len = get_struct(template)
 
 		print(ordered, len, "STRUCT")
-		const data: serdes_data<{ [string]: serdes_data<any> }> = {
+		local data: serdes_data<{ [string]: serdes_data<any> }> = {
 			read = function(buff, cursor)
-				const length = buffer.readu8(buff.buff, cursor)
+				local length = buffer.readu8(buff.buff, cursor)
 				local str_cursor = cursor + 1
-				const struct = {}
+				local struct = {}
 				for i = 1, length do
-					const r = ordered[i]
-					const value, offset = r.val.read(buff, str_cursor)
+					local r = ordered[i]
+					local value, offset = r.val.read(buff, str_cursor)
 					struct[r.index] = value
 					str_cursor += offset
 				end
@@ -887,7 +964,7 @@ do
 				alloc(b, 1)
 				u8(b, len)
 				for i = 1, len do
-					const r = ordered[i]
+					local r = ordered[i]
 					r.val.write(b, v[r.index])
 				end
 			end,
@@ -898,18 +975,18 @@ end
 
 do
 	function S_OPTIONAL<T>(v: serdes_data<T>): serdes_data<T?>
-		const read, write = v.read, v.write
+		local read, write = v.read, v.write
 		return {
 			read = function(b, cursor)
 				if buffer.readu8(b.buff, cursor) == 0 then
 					return nil, 1
 				else
-					const item, length = read(b, cursor + 1)
+					local item, length = read(b, cursor + 1)
 					return item, length + 1
 				end
 			end,
 			write = function(b, value)
-				const exists = value ~= nil
+				local exists = value ~= nil
 				alloc(b, 1)
 				if exists then
 					btrue(b)
@@ -925,9 +1002,9 @@ do
 end
 
 do
-	const data: serdes_data<any> = {
+	local data: serdes_data<any> = {
 		read = function(b, cursor)
-			const v = buffer.readu8(b.buff, cursor)
+			local v = buffer.readu8(b.buff, cursor)
 			return b.references[v], 1
 		end,
 		write = function(b, v)
@@ -941,7 +1018,7 @@ do
 end
 
 do
-	const data: serdes_data<nil> = {
+	local data: serdes_data<nil> = {
 		read = function()
 			return nil, 0
 		end,
@@ -953,15 +1030,15 @@ do
 end
 
 do
-	const bor = bit32.bor
-	const data: serdes_data<vector> = {
+	local bor = bit32.bor
+	local data: serdes_data<vector> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readi16(b.buff, c)
+			local x = buffer.readi16(b.buff, c)
 			c += 2
-			const y = buffer.readi16(b.buff, c)
+			local y = buffer.readi16(b.buff, c)
 			c += 2
-			const z = buffer.readi16(b.buff, c)
+			local z = buffer.readi16(b.buff, c)
 			c += 2
 			return vector.create(x, y, z), c - cursor
 		end,
@@ -979,15 +1056,15 @@ do
 end
 
 do
-	const bor = bit32.bor
-	const data: serdes_data<vector> = {
+	local bor = bit32.bor
+	local data: serdes_data<vector> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readi32(b.buff, c)
+			local x = buffer.readi32(b.buff, c)
 			c += 4
-			const y = buffer.readi32(b.buff, c)
+			local y = buffer.readi32(b.buff, c)
 			c += 4
-			const z = buffer.readi32(b.buff, c)
+			local z = buffer.readi32(b.buff, c)
 			c += 4
 			return vector.create(x, y, z), c - cursor
 		end,
@@ -1005,14 +1082,14 @@ do
 end
 
 do
-	const data: serdes_data<vector> = {
+	local data: serdes_data<vector> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readf32(b.buff, c)
+			local x = buffer.readf32(b.buff, c)
 			c += 4
-			const y = buffer.readf32(b.buff, c)
+			local y = buffer.readf32(b.buff, c)
 			c += 4
-			const z = buffer.readf32(b.buff, c)
+			local z = buffer.readf32(b.buff, c)
 			c += 4
 			return vector.create(x, y, z), c - cursor
 		end,
@@ -1030,20 +1107,20 @@ do
 end
 
 do
-	const data: serdes_data<CFrame> = {
+	local data: serdes_data<CFrame> = {
 		read = function(b, cursor)
 			local c = cursor
-			const x = buffer.readf32(b.buff, c)
+			local x = buffer.readf32(b.buff, c)
 			c += 4
-			const y = buffer.readf32(b.buff, c)
+			local y = buffer.readf32(b.buff, c)
 			c += 4
-			const z = buffer.readf32(b.buff, c)
+			local z = buffer.readf32(b.buff, c)
 			c += 4
-			const rx = buffer.readf32(b.buff, c)
+			local rx = buffer.readf32(b.buff, c)
 			c += 4
-			const ry = buffer.readf32(b.buff, c)
+			local ry = buffer.readf32(b.buff, c)
 			c += 4
-			const rz = buffer.readf32(b.buff, c)
+			local rz = buffer.readf32(b.buff, c)
 			c += 4
 			return CFrame.Angles(rx, ry, rz) + Vector3.new(x, y, z), c - cursor
 		end,
@@ -1067,17 +1144,17 @@ do
 end
 
 do
-	const data: serdes_data<string> = {
+	local data: serdes_data<string> = {
 		read = function(b, cursor)
 			local c = cursor
-			const len = buffer.readu16(b.buff, c)
+			local len = buffer.readu16(b.buff, c)
 			c += 2
-			const str = buffer.readstring(b.buff, c, len)
+			local str = buffer.readstring(b.buff, c, len)
 			c += len
 			return str, c - cursor
 		end,
 		write = function(b, v)
-			const len = #v
+			local len = #v
 			alloc(b, 2)
 			u16(b, len)
 			dyn_alloc(b, len)
@@ -1105,6 +1182,8 @@ return table.freeze({
 	VECF32 = (VECF32() :: never) :: vector,
 	STRING = (STRING() :: never) :: string,
 	CFRAME = (CFRAME() :: never) :: CFrame,
+	SET = (S_SET :: never) :: <K>(K) -> { [K]: true },
+	MAP = (S_MAP :: never) :: <K, V>(K, V) -> { [K]: V },
 	ARRAY = (S_ARRAY :: never) :: <T>(T) -> { T },
 	STRUCT = (S_STRUCT :: never) :: <T>(T) -> T,
 	OPTIONAL = (S_OPTIONAL :: never) :: <T>(T) -> T?,
@@ -1115,23 +1194,23 @@ return table.freeze({
     <Item class="ModuleScript" referent="13">
       <Properties>
         <string name="Name">server-lifecycle</string>
-        <string name="Source"><![CDATA[const Players = game:GetService("Players")
-const ReplicatedStorage = game:GetService("ReplicatedStorage")
-const RunService = game:GetService("RunService")
+        <string name="Source"><![CDATA[local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
-const remotes = require("./remotes")
-const read_iter = require("./read-iter")
-const read = require("./read")
-const buffer_writer = require("./buffer-writer")
+local remotes = require("./remotes")
+local read_iter = require("./read-iter")
+local read = require("./read")
+local buffer_writer = require("./buffer-writer")
 
-const alloc = buffer_writer.alloc
-const u8 = buffer_writer.u8
+local alloc = buffer_writer.alloc
+local u8 = buffer_writer.u8
 
-const dump = require("./dump")
-const logger = require("./logger")
-const middleware = require("./middleware")
-const types = require("./types")
-const validate_buffer = require("./validate-buffer")
+local dump = require("./dump")
+local logger = require("./logger")
+local middleware = require("./middleware")
+local types = require("./types")
+local validate_buffer = require("./validate-buffer")
 
 @native
 function create_super(): types.buffer_writer
@@ -1143,17 +1222,17 @@ function create_super(): types.buffer_writer
 	}
 end
 
-const mt = { __mode = "k" }
+local mt = { __mode = "k" }
 
-const players_reliable: { [Player]: types.buffer_writer? } = {}
-const players_unreliable: { [Player]: types.buffer_writer? } = {}
+local players_reliable: { [Player]: types.buffer_writer? } = {}
+local players_unreliable: { [Player]: types.buffer_writer? } = {}
 
 setmetatable(players_reliable, mt)
 setmetatable(players_unreliable, mt)
 
 @native
 function send_reliable_packet(to: Player, id: number, writer: (buf: types.buffer_writer, data: any) -> (), data: any)
-	const buf = players_reliable[to] or create_super()
+	local buf = players_reliable[to] or create_super()
 	alloc(buf, 2)
 	u8(buf, id)
 	writer(buf, data)
@@ -1161,7 +1240,7 @@ function send_reliable_packet(to: Player, id: number, writer: (buf: types.buffer
 end
 @native
 function send_unreliable_packet(to: Player, id: number, writer: (buf: types.buffer_writer, data: any) -> (), data: any)
-	const buf = players_unreliable[to] or create_super()
+	local buf = players_unreliable[to] or create_super()
 	alloc(buf, 2)
 	u8(buf, id)
 	writer(buf, data)
@@ -1170,11 +1249,11 @@ end
 
 @native
 function start()
-	const reliable = Instance.new("RemoteEvent")
+	local reliable = Instance.new("RemoteEvent")
 	reliable.Name = ".reliable"
-	const unreliable = Instance.new("UnreliableRemoteEvent")
+	local unreliable = Instance.new("UnreliableRemoteEvent")
 	unreliable.Name = ".unreliable"
-	const remote_fn = Instance.new("RemoteFunction")
+	local remote_fn = Instance.new("RemoteFunction")
 	remote_fn.Name = ".remote_fn"
 
 	remote_fn.OnServerInvoke = function(plr, b, ref)
@@ -1183,19 +1262,19 @@ function start()
 			if not middleware.run_middleware_for(nid, plr, b, ref) then
 				continue
 			end
-			const rm = remotes[nid]
+			local rm = remotes[nid]
 			if rm == nil or rm.kind ~= "function" then
 				logger.orange("INVALID FUNCTION")
 				return false
 			end
-			const rm: types.t_fn<any, any> = rm
-			const success, res = pcall(rm.callback :: never, val, plr)
+			local rm: types.t_fn<any, any> = rm
+			local success, res = pcall(rm.callback :: never, val, plr)
 			if not success then
 				return false
 			end
-			const buf = create_super()
+			local buf = create_super()
 			rm.schema_out.write(buf, res)
-			const r, refs = dump(buf)
+			local r, refs = dump(buf)
 			return true, r, refs
 		end
 		logger.orange("INVALID ID")
@@ -1218,18 +1297,18 @@ function start()
 	RunService.Heartbeat:Connect(function()
 		for _, plr in Players:GetPlayers() do
 			do
-				const buf = players_reliable[plr]
+				local buf = players_reliable[plr]
 				if buf ~= nil and buf.cursor > 0 then
-					const dumpBuffer, references = dump(buf)
+					local dumpBuffer, references = dump(buf)
 					reliable:FireClient(plr, dumpBuffer, references)
 					buf.cursor = 0
 					table.clear(buf.references)
 				end
 			end
 			do
-				const buf = players_unreliable[plr]
+				local buf = players_unreliable[plr]
 				if buf ~= nil and buf.cursor > 0 then
-					const dumpBuffer, references = dump(buf)
+					local dumpBuffer, references = dump(buf)
 					unreliable:FireClient(plr, dumpBuffer, references)
 					buf.cursor = 0
 					table.clear(buf.references)

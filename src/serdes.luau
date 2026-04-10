@@ -179,6 +179,84 @@ do
 	end
 end
 do
+	local function get_key_count<K, V>(v: { [K]: V })
+		local count = 0
+		for i in v do
+			count += 1
+		end
+		return count
+	end
+
+	function S_MAP<K, V>(k: serdes_data<K>, v: serdes_data<V>)
+		local kread, kwrite = k.read, k.write
+		local vread, vwrite = v.read, v.write
+
+		local data: serdes_data<{ [K]: V }> = {
+			read = function(b, cursor)
+				local len = buffer.readu16(b.buff, cursor)
+				local map = {}
+				local map_cursor = cursor + 2
+				for i = 1, len do
+					local k, klen = kread(b, map_cursor)
+					map_cursor += klen
+					local v, vlen = vread(b, map_cursor)
+					map_cursor += vlen
+					map[k] = v
+				end
+				return map, map_cursor - cursor
+			end,
+			write = function(b, map)
+				u16(b, get_key_count(map))
+				for i, v in map do
+					kwrite(b, i)
+					vwrite(b, v)
+				end
+			end,
+		}
+		return data
+	end
+end
+
+do
+	local function get_set_key_count<K>(set: { [K]: boolean })
+		local count = 0
+		for i, v in set do
+			if v then
+				count += 1
+			end
+		end
+		return count
+	end
+
+	function S_SET<K>(k: serdes_data<K>)
+		local kread, kwrite = k.read, k.write
+
+		local data: serdes_data<{ [K]: boolean }> = {
+			read = function(b, cursor)
+				local len = buffer.readu16(b.buff, cursor)
+				local map = {}
+				local map_cursor = cursor + 2
+				for i = 1, len do
+					local k, klen = kread(b, map_cursor)
+					map_cursor += klen
+					map[k] = true
+				end
+				return map, map_cursor - cursor
+			end,
+			write = function(b, set)
+				u16(b, get_set_key_count(set))
+				for i, v in set do
+					if v then
+						kwrite(b, i)
+					end
+				end
+			end,
+		}
+		return data
+	end
+end
+
+do
 	local map = {}
 	function get_struct(template: { [string]: serdes_data<any> })
 		if map[template] ~= nil then
@@ -435,6 +513,8 @@ return table.freeze({
 	VECF32 = (VECF32() :: never) :: vector,
 	STRING = (STRING() :: never) :: string,
 	CFRAME = (CFRAME() :: never) :: CFrame,
+	SET = (S_SET :: never) :: <K>(K) -> { [K]: true },
+	MAP = (S_MAP :: never) :: <K, V>(K, V) -> { [K]: V },
 	ARRAY = (S_ARRAY :: never) :: <T>(T) -> { T },
 	STRUCT = (S_STRUCT :: never) :: <T>(T) -> T,
 	OPTIONAL = (S_OPTIONAL :: never) :: <T>(T) -> T?,
