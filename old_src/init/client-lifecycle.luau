@@ -39,6 +39,8 @@ function send_unreliable_packet(id: number, writer: (buf: types.buffer_writer, d
 	writer(payload_unreliable, data)
 end
 
+local remote_fn: RemoteFunction
+
 @native
 function invoke_request(
 	id: number,
@@ -52,7 +54,9 @@ function invoke_request(
 	u8(buf, id)
 	writer(buf, data)
 
-	local remote_fn: RemoteFunction = ReplicatedStorage:WaitForChild(".remote_fn", math.huge)
+	if not remote_fn then
+		remote_fn = ReplicatedStorage:WaitForChild(".remote_fn", math.huge) :: never
+	end
 	local success, nbuf, refs = remote_fn:InvokeServer(dump(buf))
 	if success then
 		local bc = buffer_writer.from(nbuf)
@@ -65,9 +69,9 @@ end
 
 @native
 function start()
-	local reliable: RemoteEvent = ReplicatedStorage:WaitForChild(".reliable", math.huge)
+	local reliable: RemoteEvent = ReplicatedStorage:WaitForChild(".reliable", math.huge) :: never
 	reliable.OnClientEvent:Connect(read)
-	local unreliable: UnreliableRemoteEvent = ReplicatedStorage:WaitForChild(".unreliable", math.huge)
+	local unreliable: UnreliableRemoteEvent = ReplicatedStorage:WaitForChild(".unreliable", math.huge) :: never
 	unreliable.OnClientEvent:Connect(read)
 
 	RunService.Heartbeat:Connect(function()
@@ -86,9 +90,9 @@ function start()
 	end)
 end
 
-return {
+return table.freeze({
 	start = start,
 	send_reliable_packet = send_reliable_packet,
 	send_unreliable_packet = send_unreliable_packet,
 	invoke_request = invoke_request,
-}
+})

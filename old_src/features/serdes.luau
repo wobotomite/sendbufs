@@ -460,12 +460,12 @@ do
 			unit *= rot
 
 			alloc(b, 4 * 6)
-			f32(b, v.x)
-			f32(b, v.y)
-			f32(b, v.z)
-			f32(b, unit.x)
-			f32(b, unit.y)
-			f32(b, unit.z)
+			f32(b, v.X)
+			f32(b, v.Y)
+			f32(b, v.Z)
+			f32(b, unit.X)
+			f32(b, unit.Y)
+			f32(b, unit.Z)
 		end,
 	}
 

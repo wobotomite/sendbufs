@@ -1,6 +1,11 @@
+local RunService = game:GetService("RunService")
+local is_debug = RunService:IsStudio()
 local template = "[sendbufs]: %s"
 
 function white(...: string)
+	if is_debug then
+		return
+	end
 	print(template:format(table.concat({ ... }, ", ")))
 end
 
@@ -9,11 +14,10 @@ function red(...: string)
 end
 
 function orange(...: string)
+	if is_debug then
+		return
+	end
 	warn(template:format(table.concat({ ... }, ", ")))
-end
-
-function handler(err)
-	red(err)
 end
 
 function errorif(cond: boolean, ...: string)
@@ -22,10 +26,9 @@ function errorif(cond: boolean, ...: string)
 	end
 end
 
-return {
+return table.freeze({
 	errorif = errorif,
 	white = white,
 	red = red,
 	orange = orange,
-	handler = handler,
-}
+})

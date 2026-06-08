@@ -36,8 +36,8 @@ function run_middleware_for(id: number, plr: Player, b: buffer, refs: { unknown 
 	return true
 end
 
-return {
+return table.freeze({
 	middleware = middleware,
 	global_middleware = global_middleware,
 	run_middleware_for = run_middleware_for,
-}
+})

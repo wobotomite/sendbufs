@@ -1,15 +1,19 @@
-local EVENT_TYPE = table.freeze({
-	RELIABLE = 0,
-	UNRELIABLE = 1,
-})
+return table.freeze({
+	EVENT_TYPE = table.freeze({
+		RELIABLE = 0,
+		UNRELIABLE = 1,
+	}),
+	RELIABLE_EVENT_NAME = "_SB_RELIABLE",
+	UNRELIABLE_EVENT_NAME = "_SB_UNRELIABLE",
+	REMOTE_FUNCTION = "_SB_FUNCTION",
 
-local FUNCTION_STATUS = table.freeze({
-	IN_PROGRESS = 2,
-	PASS = 1,
-	FAIL = 0,
-})
+	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
 
-return {
-	EVENT_TYPE = EVENT_TYPE,
-	FUNCTION_STATUS = FUNCTION_STATUS,
-}
+	-- SERDES_WHITELIST = table.freeze({
+	-- 	"Workspace",
+	-- 	"ReplicatedStorage",
+	-- }),
+
+	MIN_BUFFER_SIZE = 16,
+	SUPER_BUFFER_SIZE = 256,
+})

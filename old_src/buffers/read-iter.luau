@@ -5,7 +5,7 @@ local remotes = require("./remotes")
 local from = buffer_writer.from
 
 @native
-function read_iter(reader_prop: "schema" | "schema_out", b: buffer, refs: { unknown }?)
+function read_iter(reader_prop: "schema" | "schema_out", b: buffer, refs: { unknown }?): () -> (number, any)
 	local cursor = 0
 	local totalLen = buffer.len(b)
 	local sb = from(b)
@@ -23,6 +23,4 @@ function read_iter(reader_prop: "schema" | "schema_out", b: buffer, refs: { unkn
 	end
 end
 
-return (
-	read_iter :: never
-) :: <T...>(reader_prop: "schema" | "schema_out", b: buffer, refs: { unknown }?) -> () -> (number, any)
+return read_iter

@@ -7,11 +7,5 @@
     "typeErrors": true,
     "globals": [
         "warn"
-    ],
-    "aliases": {
-        "pkg": "Packages",
-        "client": "src/client",
-        "server": "src/server",
-        "shared": "src/shared"
-    }
+    ]
 }
