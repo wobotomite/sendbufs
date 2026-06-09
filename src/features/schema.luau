@@ -4,14 +4,15 @@ local writer = require(script.Parent.Parent.util.writer)
 
 local alloc = writer.alloc
 local dyn_alloc = writer.dyn_alloc
-local u8 = writer.u8
-local u16 = writer.u16
-local u32 = writer.u32
-local i8 = writer.i8
-local i16 = writer.i16
-local i32 = writer.i32
-local f32 = writer.f32
-local bool = writer.bool
+local b_u8 = writer.u8
+local b_u16 = writer.u16
+local b_u32 = writer.u32
+local b_i8 = writer.i8
+local b_i16 = writer.i16
+local b_i32 = writer.i32
+local b_f32 = writer.f32
+local b_f64 = writer.f64
+local b_bool = writer.bool
 local reference = writer.reference
 local writestring = writer.writestring
 
@@ -24,7 +25,7 @@ function bool(): libtypes.Schema<boolean>
 		end,
 		write = function(n)
 			alloc(1)
-			bool(n)
+			b_bool(n)
 		end,
 		__T = nil :: never,
 	}
@@ -37,7 +38,7 @@ function u8(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(1)
-			u8(n)
+			b_u8(n)
 		end,
 		__T = nil :: never,
 	}
@@ -49,7 +50,7 @@ function u16(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(2)
-			u16(n)
+			b_u16(n)
 		end,
 		__T = nil :: never,
 	}
@@ -61,7 +62,7 @@ function u32(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(4)
-			u32(n)
+			b_u32(n)
 		end,
 		__T = nil :: never,
 	}
@@ -74,7 +75,7 @@ function i8(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(1)
-			i8(n)
+			b_i8(n)
 		end,
 		__T = nil :: never,
 	}
@@ -86,7 +87,7 @@ function i16(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(2)
-			i16(n)
+			b_i16(n)
 		end,
 		__T = nil :: never,
 	}
@@ -98,7 +99,7 @@ function i32(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(4)
-			i32(n)
+			b_i32(n)
 		end,
 		__T = nil :: never,
 	}
@@ -111,7 +112,7 @@ function f32(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(4)
-			f32(n)
+			b_f32(n)
 		end,
 		__T = nil :: never,
 	}
@@ -124,7 +125,7 @@ function f64(): libtypes.Schema<number>
 		end,
 		write = function(n)
 			alloc(4)
-			f64(n)
+			b_f64(n)
 		end,
 		__T = nil :: never,
 	}
@@ -144,7 +145,7 @@ function maybe<T>(input: libtypes.Schema<T>): libtypes.Schema<T?>
 		write = function(v)
 			local exists = v ~= nil
 			alloc(1)
-			bool(exists)
+			b_bool(exists)
 			if exists then
 				write(v)
 			end
@@ -170,7 +171,7 @@ function array<T>(input: libtypes.Schema<T>): libtypes.Schema<{ T }>
 		write = function(v)
 			local s = #v
 			alloc(2)
-			u16(s)
+			b_u16(s)
 			for i = 1, s do
 				write(v[i])
 			end
@@ -215,7 +216,7 @@ function map<K, V>(k: libtypes.Schema<K>, v: libtypes.Schema<V>): libtypes.Schem
 			return map, map_cursor - cursor
 		end,
 		write = function(map)
-			u16(get_map_key_count(map))
+			b_u16(get_map_key_count(map))
 			for i, v in map do
 				kwrite(i)
 				vwrite(v)
@@ -240,7 +241,7 @@ function set<K>(k: libtypes.Schema<K>): libtypes.Schema<{ [K]: boolean }>
 			return map, map_cursor - cursor
 		end,
 		write = function(set)
-			u16(get_set_key_count(set))
+			b_u16(get_set_key_count(set))
 			for i, v in set do
 				if v then
 					kwrite(i)
@@ -271,7 +272,7 @@ do
 	end
 end
 
-function struct<T>(input: T & SchemaStruct): libtypes.Schema<T & SchemaStruct>
+function struct<T>(input: T & {}): libtypes.Schema<libtypes.GetNestedSchema<T> & {}>
 	local ordered, len = get_struct(input)
 	return {
 		read = function(buff, cursor)
@@ -284,14 +285,14 @@ function struct<T>(input: T & SchemaStruct): libtypes.Schema<T & SchemaStruct>
 				struct[r.index] = value
 				str_cursor += offset
 			end
-			return struct, str_cursor - cursor
+			return struct :: any, str_cursor - cursor
 		end,
 		write = function(v)
 			alloc(1)
-			u8(len)
+			b_u8(len)
 			for i = 1, len do
 				local r = ordered[i]
-				r.val.write(v[r.index])
+				r.val.write((v :: any)[r.index])
 			end
 		end,
 		__T = nil :: never,
@@ -376,7 +377,7 @@ function str(): libtypes.Schema<string>
 		write = function(v)
 			local len = #v
 			alloc(2)
-			u16(len)
+			b_u16(len)
 			dyn_alloc(len)
 			writestring(v:sub(1, 65535))
 		end,
@@ -384,7 +385,7 @@ function str(): libtypes.Schema<string>
 	}
 end
 
-function ref(): libtypes.Schema<any>
+function ref(): libtypes.Schema<any?>
 	return {
 		read = function(b, cursor)
 			local ref_list = ref_tracker.get()

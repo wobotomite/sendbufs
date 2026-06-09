@@ -7,6 +7,8 @@ return table.freeze({
 	UNRELIABLE_EVENT_NAME = "_SB_UNRELIABLE",
 	REMOTE_FUNCTION = "_SB_FUNCTION",
 
+	EVENT_FOLDER = game:GetService("ReplicatedStorage"),
+
 	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
 
 	-- SERDES_WHITELIST = table.freeze({
@@ -14,6 +16,8 @@ return table.freeze({
 	-- 	"ReplicatedStorage",
 	-- }),
 
+	MAX_SERVER_BUFFER_SIZE = 4096,
+
 	MIN_BUFFER_SIZE = 16,
-	SUPER_BUFFER_SIZE = 256,
+	LARGE_BUFFER_SIZE = 256,
 })

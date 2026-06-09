@@ -2,12 +2,19 @@
   <Item class="ModuleScript" referent="0">
     <Properties>
       <string name="Name">sendbufs</string>
-      <string name="Source"><![CDATA[local client = require(script.init_modules.client)
-local server = require(script.init_modules.server)
+      <string name="Source"><![CDATA[local middleware = require(script.features.middleware)
+local schema = require(script.features.schema)
+local client = require(script["init-modules"].client)
+local server = require(script["init-modules"].server)
+local shared = require(script["init-modules"].shared)
 
 return table.freeze({
 	create_client = client,
 	create_server = server,
+	event = shared.event,
+	fn = shared.fn,
+	middleware = middleware.middleware,
+	schema = schema,
 })
 ]]></string>
     </Properties>
@@ -23,15 +30,19 @@ return table.freeze({
 	UNRELIABLE_EVENT_NAME = "_SB_UNRELIABLE",
 	REMOTE_FUNCTION = "_SB_FUNCTION",
 
-	INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
+	EVENT_FOLDER = game:GetService("ReplicatedStorage"),
 
-	SERDES_WHITELIST = table.freeze({
-		"Workspace",
-		"ReplicatedStorage",
-	}),
+	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
+
+	-- SERDES_WHITELIST = table.freeze({
+	-- 	"Workspace",
+	-- 	"ReplicatedStorage",
+	-- }),
+
+	MAX_SERVER_BUFFER_SIZE = 4096,
 
 	MIN_BUFFER_SIZE = 16,
-	SUPER_BUFFER_SIZE = 256,
+	LARGE_BUFFER_SIZE = 256,
 })
 ]]></string>
       </Properties>
@@ -40,172 +51,924 @@ return table.freeze({
       <Properties>
         <string name="Name">features</string>
       </Properties>
-      <Item class="Folder" referent="3">
+      <Item class="ModuleScript" referent="3">
         <Properties>
-          <string name="Name">instance-map</string>
-        </Properties>
-        <Item class="Script" referent="4">
-          <Properties>
-            <string name="Name">c</string>
-            <token name="RunContext">2</token>
-            <string name="Source"><![CDATA[--!strict
---!optimize 2
---[[
-    InstanceMap.client V0.1.1
+          <string name="Name">middleware</string>
+          <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
 
-    Initializes client instance map
-]]
------------------------------------------------------
--- DEPENDENCIES                                    --
------------------------------------------------------
-local constants = require(script.Parent.Parent.Parent.constants)
-local instanceMap = require(script.Parent.shared)
+local libtypes = require(script.Parent.Parent.util.libtypes)
 
------------------------------------------------------
--- LOCALIZATIONS                                   --
------------------------------------------------------
-local DELAY: <A..., R...>(number?, ((A...) -> R...) | thread, A...) -> thread = task.delay
-local SPAWN: <A..., R...>(((A...) -> R...) | thread, A...) -> thread = task.spawn
-local RUNNING: () -> thread = coroutine.running
-local YIELD: <A..., R...>(A...) -> R... = coroutine.yield
+local middleware_map: { [number]: { libtypes.Middleware } } = {}
 
-local ATTRIBUTE_NAME: string = constants.INSTANCE_ID_ATTRIBUTE
-
------------------------------------------------------
--- MAIN                                            --
------------------------------------------------------
-local function retryGetAttribute(co: thread, instance: Instance): ()
-	SPAWN(co, instance:GetAttribute(ATTRIBUTE_NAME))
+function middleware(t: libtypes.Intermediate<any, any, any>, mw: libtypes.Middleware)
+	local entry = middleware_map[t.id] or {}
+	table.insert(entry, mw)
+	middleware_map[t.id] = entry
+end
+function get(id: number): { libtypes.Middleware }?
+	return middleware_map[id]
 end
 
-local function deferFetch(instance: Instance): number?
-	local co = RUNNING()
-	DELAY(0, retryGetAttribute, co, instance)
-	return YIELD()
-end
-
-local function onInstance(instance: Instance): ()
-	local id: number? = (instance:GetAttribute(ATTRIBUTE_NAME) :: number?) or deferFetch(instance)
-	if not id then
-		return
+function run_middleware(id: number, plr: Player)
+	assert(RunService:IsServer(), "Middleware can only be called on the server!")
+	local mw = (get(id) or {}) :: { libtypes.Middleware }
+	for i, v in mw do
+		if not v(id, plr) then
+			return false
+		end
 	end
-	instanceMap[id] = instance
+	return true
 end
 
-game.DescendantAdded:Connect(onInstance)
+return table.freeze({
+	run_middleware = run_middleware,
+	middleware = middleware,
+	get = get,
+})
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">schema</string>
+          <string name="Source"><![CDATA[local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
+local libtypes = require(script.Parent.Parent.util.libtypes)
+local writer = require(script.Parent.Parent.util.writer)
 
-for _, instance: Instance in game:GetDescendants() do
-	onInstance(instance)
+local alloc = writer.alloc
+local dyn_alloc = writer.dyn_alloc
+local b_u8 = writer.u8
+local b_u16 = writer.u16
+local b_u32 = writer.u32
+local b_i8 = writer.i8
+local b_i16 = writer.i16
+local b_i32 = writer.i32
+local b_f32 = writer.f32
+local b_f64 = writer.f64
+local b_bool = writer.bool
+local reference = writer.reference
+local writestring = writer.writestring
+
+local freeze = table.freeze :: <T>(T) -> T
+
+function bool(): libtypes.Schema<boolean>
+	return {
+		read = function(buf, o)
+			return (buffer.readu8(buf, o) == 1), 1
+		end,
+		write = function(n)
+			alloc(1)
+			b_bool(n)
+		end,
+		__T = nil :: never,
+	}
+end
+
+function u8(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readu8(buf, o), 1
+		end,
+		write = function(n)
+			alloc(1)
+			b_u8(n)
+		end,
+		__T = nil :: never,
+	}
+end
+function u16(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readu16(buf, o), 2
+		end,
+		write = function(n)
+			alloc(2)
+			b_u16(n)
+		end,
+		__T = nil :: never,
+	}
+end
+function u32(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readu32(buf, o), 4
+		end,
+		write = function(n)
+			alloc(4)
+			b_u32(n)
+		end,
+		__T = nil :: never,
+	}
+end
+
+function i8(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readi8(buf, o), 1
+		end,
+		write = function(n)
+			alloc(1)
+			b_i8(n)
+		end,
+		__T = nil :: never,
+	}
+end
+function i16(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readi16(buf, o), 2
+		end,
+		write = function(n)
+			alloc(2)
+			b_i16(n)
+		end,
+		__T = nil :: never,
+	}
+end
+function i32(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readi32(buf, o), 4
+		end,
+		write = function(n)
+			alloc(4)
+			b_i32(n)
+		end,
+		__T = nil :: never,
+	}
+end
+
+function f32(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readf32(buf, o), 4
+		end,
+		write = function(n)
+			alloc(4)
+			b_f32(n)
+		end,
+		__T = nil :: never,
+	}
+end
+
+function f64(): libtypes.Schema<number>
+	return {
+		read = function(buf, o)
+			return buffer.readf64(buf, o), 8
+		end,
+		write = function(n)
+			alloc(4)
+			b_f64(n)
+		end,
+		__T = nil :: never,
+	}
+end
+
+function maybe<T>(input: libtypes.Schema<T>): libtypes.Schema<T?>
+	local read, write = input.read, input.write
+	return {
+		read = function(buf, offset)
+			if buffer.readu8(buf, offset) == 0 then
+				return nil, 1
+			else
+				local item, length = read(buf, offset + 1)
+				return item, length + 1
+			end
+		end,
+		write = function(v)
+			local exists = v ~= nil
+			alloc(1)
+			b_bool(exists)
+			if exists then
+				write(v)
+			end
+		end,
+		__T = nil :: never,
+	}
+end
+
+function array<T>(input: libtypes.Schema<T>): libtypes.Schema<{ T }>
+	local read, write = input.read, input.write
+	return {
+		read = function(b, cursor)
+			local len = buffer.readu16(b, cursor)
+			local array: { T } = {}
+			local arr_cursor = cursor + 2
+			for i = 1, len do
+				local v, len = read(b, arr_cursor)
+				array[i] = v
+				arr_cursor += len
+			end
+			return array, arr_cursor - cursor
+		end,
+		write = function(v)
+			local s = #v
+			alloc(2)
+			b_u16(s)
+			for i = 1, s do
+				write(v[i])
+			end
+		end,
+		__T = nil :: never,
+	}
+end
+do
+	function get_set_key_count<K>(set: { [K]: boolean })
+		local count = 0
+		for i, v in set do
+			if v then
+				count += 1
+			end
+		end
+		return count
+	end
+	function get_map_key_count<K, V>(v: { [K]: V })
+		local count = 0
+		for i in v do
+			count += 1
+		end
+		return count
+	end
+end
+function map<K, V>(k: libtypes.Schema<K>, v: libtypes.Schema<V>): libtypes.Schema<{ [K]: V }>
+	local kread, kwrite = k.read, k.write
+	local vread, vwrite = v.read, v.write
+
+	return {
+		read = function(b, cursor)
+			local len = buffer.readu16(b, cursor)
+			local map = {}
+			local map_cursor = cursor + 2
+			for i = 1, len do
+				local k, klen = kread(b, map_cursor)
+				map_cursor += klen
+				local v, vlen = vread(b, map_cursor)
+				map_cursor += vlen
+				map[k] = v
+			end
+			return map, map_cursor - cursor
+		end,
+		write = function(map)
+			b_u16(get_map_key_count(map))
+			for i, v in map do
+				kwrite(i)
+				vwrite(v)
+			end
+		end,
+		__T = nil :: never,
+	}
+end
+function set<K>(k: libtypes.Schema<K>): libtypes.Schema<{ [K]: boolean }>
+	local kread, kwrite = k.read, k.write
+
+	return {
+		read = function(b, cursor)
+			local len = buffer.readu16(b, cursor)
+			local map = {}
+			local map_cursor = cursor + 2
+			for i = 1, len do
+				local k, klen = kread(b, map_cursor)
+				map_cursor += klen
+				map[k] = true
+			end
+			return map, map_cursor - cursor
+		end,
+		write = function(set)
+			b_u16(get_set_key_count(set))
+			for i, v in set do
+				if v then
+					kwrite(i)
+				end
+			end
+		end,
+		__T = nil :: never,
+	}
+end
+
+type SchemaStruct = {}
+do
+	local map: { [{}]: { { index: string, val: libtypes.Schema<any> } } } = {}
+	function get_struct(template: SchemaStruct)
+		if map[template] ~= nil then
+			return map[template], #map[template]
+		end
+		local converted_struct: { { index: string, val: libtypes.Schema<any> } } = {}
+		for i, v in template :: { [string]: any } do
+			converted_struct[#converted_struct + 1] = { index = i, val = v }
+		end
+		table.sort(converted_struct, function(a0: { index: string }, a1: { index: string }): boolean
+			return a0.index > a1.index
+		end)
+		local len = #converted_struct
+		map[template] = converted_struct
+		return converted_struct, len
+	end
+end
+
+function struct<T>(input: T & {}): libtypes.Schema<libtypes.GetNestedSchema<T> & {}>
+	local ordered, len = get_struct(input)
+	return {
+		read = function(buff, cursor)
+			local length = buffer.readu8(buff, cursor)
+			local str_cursor = cursor + 1
+			local struct = {}
+			for i = 1, length do
+				local r = ordered[i]
+				local value, offset = r.val.read(buff, str_cursor)
+				struct[r.index] = value
+				str_cursor += offset
+			end
+			return struct :: any, str_cursor - cursor
+		end,
+		write = function(v)
+			alloc(1)
+			b_u8(len)
+			for i = 1, len do
+				local r = ordered[i]
+				r.val.write((v :: any)[r.index])
+			end
+		end,
+		__T = nil :: never,
+	}
+end
+
+function vector<T>(input: libtypes.Schema<T & number>): libtypes.Schema<Vector3>
+	local read, write = input.read, input.write
+	return {
+		read = function(b, o)
+			local c = o
+			local x, add = read(b, c)
+			c += add
+			local y, add = read(b, c)
+			c += add
+			local z, add = read(b, c)
+			c += add
+			return Vector3.new(x, y, z), c - o
+		end,
+		write = function(vector: Vector3)
+			write(vector.X)
+			write(vector.Y)
+			write(vector.Z)
+		end,
+		__T = nil :: never,
+	}
+end
+function cframe<T>(input: libtypes.Schema<T & number>): libtypes.Schema<CFrame>
+	local read, write = input.read, input.write
+
+	return {
+		read = function(buff, init)
+			local c = init
+			local x, o = read(buff, c)
+			c += o
+			local y, o = read(buff, c)
+			c += o
+			local z, o = read(buff, c)
+			c += o
+			local rx, o = read(buff, c)
+			c += o
+			local ry, o = read(buff, c)
+			c += o
+			local rz, o = read(buff, c)
+			c += o
+			return CFrame.Angles(rx, ry, rz) + Vector3.new(x, y, z), c - init
+		end,
+		write = function(v: CFrame)
+			local unit, rot = v:ToAxisAngle()
+			unit *= rot
+			write(v.X)
+			write(v.Y)
+			write(v.Z)
+			write(unit.X)
+			write(unit.Y)
+			write(unit.Z)
+		end,
+		__T = nil :: never,
+	}
+end
+
+function null(): libtypes.Schema<nil>
+	return {
+		write = function() end,
+		read = function()
+			return nil, 0
+		end,
+		__T = nil,
+	}
+end
+
+function str(): libtypes.Schema<string>
+	return {
+		read = function(b, cursor)
+			local c = cursor
+			local len = buffer.readu16(b, c)
+			c += 2
+			local str = buffer.readstring(b, c, len)
+			c += len
+			return str, c - cursor
+		end,
+		write = function(v)
+			local len = #v
+			alloc(2)
+			b_u16(len)
+			dyn_alloc(len)
+			writestring(v:sub(1, 65535))
+		end,
+		__T = nil :: never,
+	}
+end
+
+function ref(): libtypes.Schema<any?>
+	return {
+		read = function(b, cursor)
+			local ref_list = ref_tracker.get()
+			if not ref_list then
+				return nil, 1
+			end
+			return ref_list[buffer.readu8(b, cursor)], 1
+		end,
+		write = function(v)
+			alloc(1)
+			reference(v)
+		end,
+		__T = nil :: never,
+	}
+end
+
+return freeze({
+	maybe = maybe,
+	array = array,
+	struct = struct,
+	map = map,
+	set = set,
+	vector = vector,
+	cframe = cframe,
+
+	-- primitive:
+	ref = ref(),
+	str = str(),
+	bool = bool(),
+	null = null(),
+	u8 = u8(),
+	u16 = u16(),
+	u32 = u32(),
+	i8 = i8(),
+	i16 = i16(),
+	i32 = i32(),
+	f32 = f32(),
+	f64 = f64(),
+})
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="5">
+        <Properties>
+          <string name="Name">validate</string>
+          <string name="Source"><![CDATA[return @native function(b: buffer, refs: { unknown }?)
+	if refs and typeof(refs) ~= "table" then
+		return false
+	end
+	return typeof(b) == "buffer" and buffer.len(b) > 0
 end
 ]]></string>
-          </Properties>
-        </Item>
-        <Item class="Script" referent="5">
-          <Properties>
-            <string name="Name">s</string>
-            <token name="RunContext">1</token>
-            <string name="Source"><![CDATA[--!strict
---!optimize 2
---[[
-    InstanceMap.server V0.1.1
+        </Properties>
+      </Item>
+    </Item>
+    <Item class="Folder" referent="6">
+      <Properties>
+        <string name="Name">init-modules</string>
+      </Properties>
+      <Item class="ModuleScript" referent="7">
+        <Properties>
+          <string name="Name">client</string>
+          <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
 
-    Initializes server instance map
-]]
------------------------------------------------------
--- DEPENDENCIES                                    --
------------------------------------------------------
-local constants = require(script.Parent.Parent.Parent.constants)
-const instanceMap = require(script.Parent.shared)
+local constants = require(script.Parent.Parent.constants)
+local schema = require(script.Parent.Parent.features.schema)
+local connections = require(script.Parent.Parent.trackers.connections)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 
-local mapped_services = {}
-do
-	const t = {}
-	for i = 1, #constants.SERDES_WHITELIST do
-		const service = game:GetService(constants.SERDES_WHITELIST[i])
-		table.insert(t, service)
+local dump = require(script.Parent.Parent.util.dump)
+local libtypes = require(script.Parent.Parent.util.libtypes)
+local writer = require(script.Parent.Parent.util.writer)
+local iter_and_convert = require(script.Parent.Parent.util["iter-and-convert"])
+local large_buffer = require(script.Parent.Parent.util["large-buffer"])
+local read_client = require(script.Parent.Parent.util["read-client"])
+local small_buffer = require(script.Parent.Parent.util["small-buffer"])
+
+local load = writer.load
+local alloc = writer.alloc
+local u8 = writer.u8
+local export = writer.export
+
+local __init = false
+
+@native
+function init<T>(t: T & {}): libtypes.ReplicateClient<T>
+	assert(not __init, "NETWORKING ALREADY STARTED")
+	__init = true
+	local ReliableEvent = constants.EVENT_FOLDER:WaitForChild(constants.RELIABLE_EVENT_NAME, math.huge) :: RemoteEvent
+	local UnreliableEvent =
+		constants.EVENT_FOLDER:WaitForChild(constants.UNRELIABLE_EVENT_NAME, math.huge) :: UnreliableRemoteEvent
+	local RemoteFunction = constants.EVENT_FOLDER:WaitForChild(constants.REMOTE_FUNCTION, math.huge) :: RemoteFunction
+
+	ReliableEvent.OnClientEvent:Connect(function(buf, ref)
+		ref_tracker.set(ref)
+		read_client(buf)
+	end)
+
+	UnreliableEvent.OnClientEvent:Connect(function(buf, ref)
+		ref_tracker.set(ref)
+		read_client(buf)
+	end)
+
+	local payload_reliable = large_buffer()
+	local payload_unreliable = large_buffer()
+
+	local function append_reliable(id: number, writer: (any) -> (), data: any)
+		load(payload_reliable)
+
+		alloc(1)
+		u8(id)
+		writer(data)
+		payload_reliable = export()
 	end
-	mapped_services = t
+	local function append_unreliable(id: number, writer: (any) -> (), data: any)
+		load(payload_unreliable)
+
+		alloc(1)
+		u8(id)
+		writer(data)
+		payload_unreliable = export()
+	end
+	local function invoke_fn(
+		id: number,
+		writer: (any) -> (),
+		reader: (buffer: buffer, cursor: number) -> (any, number),
+		data: any
+	): (boolean, any)
+		local buf = small_buffer()
+		load(buf)
+		alloc(1)
+		u8(id)
+		writer(data)
+		buf = export()
+		local success, nbuf, refs = RemoteFunction:InvokeServer(dump(buf))
+		if success then
+			ref_tracker.set(refs)
+			return true, reader(nbuf, 0)
+		end
+		return false
+	end
+
+	local function create_object(intermediate: libtypes.Intermediate<any, any>): any
+		if intermediate.__kind == "function" then
+			local r: libtypes.ClientFunction = table.freeze({
+				invoke = function(self, data)
+					return invoke_fn(intermediate.id, intermediate.schema.write, intermediate.schema_output.read, data)
+				end,
+				__kind = "function" :: "function",
+				__T = nil :: never,
+			})
+			return r
+		elseif intermediate.__kind == "event" then
+			local r: libtypes.ClientRemote = table.freeze({
+				connect = function(self, callback)
+					return connections.add(intermediate.id, callback)
+				end,
+				fire = function(self, data)
+					if intermediate.reliable then
+						append_reliable(intermediate.id, intermediate.schema.write, data)
+					else
+						append_unreliable(intermediate.id, intermediate.schema.write, data)
+					end
+				end,
+				__kind = "event" :: "event",
+				__T = nil :: never,
+			})
+			return r
+		end
+		error("INVALID __KIND! EXPECTED function | event")
+	end
+
+	RunService.Heartbeat:Connect(function()
+		if payload_reliable.cursor > 0 then
+			local b, refs = dump(payload_reliable)
+			ReliableEvent:FireServer(b, refs)
+			payload_reliable.cursor = 0
+			table.clear(payload_reliable.references)
+		end
+		if payload_unreliable.cursor > 0 then
+			local b, r = dump(payload_unreliable)
+			UnreliableEvent:FireServer(b, r)
+			payload_unreliable.cursor = 0
+			table.clear(payload_unreliable.references)
+		end
+	end)
+
+	return iter_and_convert(t, create_object) :: never
 end
 
------------------------------------------------------
--- LOCALIZATIONS                                   --
------------------------------------------------------
-const ATTRIBUTE_NAME: string = constants.INSTANCE_ID_ATTRIBUTE
+return init
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="8">
+        <Properties>
+          <string name="Name">server</string>
+          <string name="Source"><![CDATA[local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 
------------------------------------------------------
--- MAIN                                            --
------------------------------------------------------
-local i: number = 0
+local constants = require(script.Parent.Parent.constants)
+local validate = require(script.Parent.Parent.features.validate)
+local connections = require(script.Parent.Parent.trackers.connections)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
+local callbacks = require(script.Parent.Parent.util.callbacks)
 
-const function onInstance(instance: Instance): ()
-	local no_ret = false
-	for i, v in mapped_services do
-		if instance:IsDescendantOf(v) then
-			no_ret = true
-			break
+local dump = require(script.Parent.Parent.util.dump)
+local libtypes = require(script.Parent.Parent.util.libtypes)
+local writer = require(script.Parent.Parent.util.writer)
+local iter_and_convert = require(script.Parent.Parent.util["iter-and-convert"])
+local large_buffer = require(script.Parent.Parent.util["large-buffer"])
+local read_server = require(script.Parent.Parent.util["read-server"])
+local read_server_remote_function = require(script.Parent.Parent.util["read-server-remote-function"])
+
+local load = writer.load
+local alloc = writer.alloc
+local u8 = writer.u8
+local export = writer.export
+
+local __init = false
+
+@native
+function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateServer<T>
+	assert(not __init, "NETWORKING ALREADY STARTED")
+	__init = true
+
+	local max_buffer_size: number = max_buffer_size or constants.MAX_SERVER_BUFFER_SIZE
+
+	local mt = table.freeze({ __mode = "k" })
+
+	local players_reliable: { [Player]: libtypes.Buffer? } = {}
+	local players_unreliable: { [Player]: libtypes.Buffer? } = {}
+
+	local global_reliable = large_buffer()
+	local global_unreliable = large_buffer()
+
+	setmetatable(players_reliable, mt)
+	setmetatable(players_unreliable, mt)
+
+	local function append_all_reliable(id: number, writer: (any) -> (), data: any)
+		load(global_reliable or large_buffer())
+		alloc(1)
+		u8(id)
+		writer(data)
+		global_reliable = export()
+	end
+
+	local function append_all_unreliable(id: number, writer: (any) -> (), data: any)
+		load(global_unreliable or large_buffer())
+		alloc(1)
+		u8(id)
+		writer(data)
+		global_unreliable = export()
+	end
+
+	local function append_reliable(player: Player, id: number, writer: (any) -> (), data: any)
+		load(players_reliable[player] or large_buffer())
+		alloc(1)
+		u8(id)
+		writer(data)
+		players_reliable[player] = export()
+	end
+	local function append_unreliable(player: Player, id: number, writer: (any) -> (), data: any)
+		load(players_unreliable[player] or large_buffer())
+		alloc(1)
+		u8(id)
+		writer(data)
+		players_unreliable[player] = export()
+	end
+
+	local ReliableEvent = Instance.new("RemoteEvent")
+	ReliableEvent.Name = constants.RELIABLE_EVENT_NAME
+	local UnreliableEvent = Instance.new("UnreliableRemoteEvent")
+	UnreliableEvent.Name = constants.UNRELIABLE_EVENT_NAME
+	local RemoteFunction = Instance.new("RemoteFunction")
+	RemoteFunction.Name = constants.REMOTE_FUNCTION
+
+	local function create_object(intermediate: libtypes.Intermediate<any, any>): any
+		if intermediate.__kind == "function" then
+			local r: libtypes.ServerFunction = table.freeze({
+				set_callback = function(self, callback)
+					return callbacks.set(intermediate.id, callback)
+				end,
+				__kind = "function" :: "function",
+				__T = nil :: never,
+			})
+			return r
+		elseif intermediate.__kind == "event" then
+			local r: libtypes.ServerRemote = table.freeze({
+				connect = function(self, callback)
+					return connections.add(intermediate.id, callback)
+				end,
+				fire_all = function(self, data)
+					if intermediate.reliable then
+						append_all_reliable(intermediate.id, intermediate.schema.write, data)
+					else
+						append_all_unreliable(intermediate.id, intermediate.schema.write, data)
+					end
+				end,
+				fire = function(self, p, data)
+					if intermediate.reliable then
+						append_reliable(p, intermediate.id, intermediate.schema.write, data)
+					else
+						append_unreliable(p, intermediate.id, intermediate.schema.write, data)
+					end
+				end,
+				__kind = "event" :: "event",
+				__T = nil :: never,
+			})
+			return r
+		end
+		error("INVALID __KIND! EXPECTED function | event")
+	end
+
+	UnreliableEvent.OnServerEvent:Connect(function(player: Player, buf, ref)
+		if not validate(buf, ref) then
+			return
+		end
+		assert(
+			max_buffer_size > buffer.len(buf),
+			`BUFFER OF SIZE {buffer.len(buf)} EXCEEDS {max_buffer_size}B! SET THE SECOND PARAMETER OF THE INIT() FUNCTION TO A BIGGER VALUE!`
+		)
+		ref_tracker.set(ref)
+		read_server(buf, player)
+	end)
+	ReliableEvent.OnServerEvent:Connect(function(player: Player, buf, ref)
+		if not validate(buf, ref) then
+			return
+		end
+		assert(
+			max_buffer_size > buffer.len(buf),
+			`BUFFER OF SIZE {buffer.len(buf)} EXCEEDS {max_buffer_size}B! SET THE SECOND PARAMETER OF THE INIT() FUNCTION TO A BIGGER VALUE!`
+		)
+		ref_tracker.set(ref)
+		read_server(buf, player)
+	end)
+
+	RemoteFunction.OnServerInvoke = function(plr, b, ref): any
+		if not validate(b, ref) then
+			return false, nil, nil
+		end
+		ref_tracker.set(ref)
+		return read_server_remote_function(plr, b)
+	end
+
+	RunService.Heartbeat:Connect(function()
+		if global_reliable.cursor > 0 then
+			local b, r = dump(global_reliable)
+			ReliableEvent:FireAllClients(b, r)
+
+			global_reliable.cursor = 0
+			table.clear(global_reliable.references)
+		end
+
+		if global_unreliable.cursor > 0 then
+			local b, r = dump(global_unreliable)
+			UnreliableEvent:FireAllClients(b, r)
+
+			global_unreliable.cursor = 0
+			table.clear(global_unreliable.references)
+		end
+
+		for _, player in Players:GetPlayers() do
+			local p_rel = players_reliable[player]
+			local p_unrel = players_unreliable[player]
+
+			if p_rel and p_rel.cursor > 0 then
+				local b, r = dump(p_rel)
+				ReliableEvent:FireClient(player, b, r)
+				p_rel.cursor = 0
+				table.clear(p_rel.references)
+			end
+
+			if p_unrel and p_unrel.cursor > 0 then
+				local b, r = dump(p_unrel)
+				UnreliableEvent:FireClient(player, b, r)
+				p_unrel.cursor = 0
+				table.clear(p_unrel.references)
+			end
+		end
+	end)
+
+	ReliableEvent.Parent = constants.EVENT_FOLDER
+	UnreliableEvent.Parent = constants.EVENT_FOLDER
+	RemoteFunction.Parent = constants.EVENT_FOLDER
+	return iter_and_convert(t, create_object) :: never
+end
+
+return init
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="9">
+        <Properties>
+          <string name="Name">shared</string>
+          <string name="Source"><![CDATA[local schema = require(script.Parent.Parent.features.schema)
+local id_tracker = require(script.Parent.Parent.trackers["id-tracker"])
+local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
+local libtypes = require(script.Parent.Parent.util.libtypes)
+
+function event<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
+	local t = table.freeze({
+		__kind = "event" :: "event",
+		__schema = nil :: T,
+		__schema_output = nil :: T,
+		schema = input or schema.null,
+		schema_output = input or schema.null,
+		id = id_tracker.take(),
+		reliable = true,
+	})
+	remote_tracker.map(t.id, t)
+	return t
+end
+
+function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
+	local t = table.freeze({
+		__kind = "event" :: "event",
+		__schema = nil :: T,
+		__schema_output = nil :: T,
+		schema = input or schema.null,
+		schema_output = input or schema.null,
+		id = id_tracker.take(),
+		reliable = false,
+	})
+	remote_tracker.map(t.id, t)
+	return t
+end
+
+function fn<T, K>(input: libtypes.Schema<T>?, output: libtypes.Schema<K>?): libtypes.Intermediate<T, K, "function">
+	warn(output, "IS NULL?")
+	local t = table.freeze({
+		__kind = "function" :: "function",
+		__schema = nil :: T,
+		__schema_output = nil :: K,
+		schema = input or schema.null,
+		schema_output = output or schema.null,
+		id = id_tracker.take(),
+		reliable = true,
+	})
+	remote_tracker.map(t.id, t)
+	return t
+end
+
+return table.freeze({
+	fn = fn,
+	unreliable = unreliable,
+	event = event,
+})
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+    <Item class="Folder" referent="10">
+      <Properties>
+        <string name="Name">trackers</string>
+      </Properties>
+      <Item class="ModuleScript" referent="11">
+        <Properties>
+          <string name="Name">connections</string>
+          <string name="Source"><![CDATA[local libtypes = require(script.Parent.Parent.util.libtypes)
+
+local connection_map: { [number]: { libtypes.Connection } } = {}
+
+function add(id: number, cb: libtypes.Connection)
+	local entry = connection_map[id] or {}
+	table.insert(entry, cb)
+	local function remove()
+		local arr = connection_map[id]
+		local index = table.find(arr, cb)
+		if index then
+			table.remove(connection_map[id], index)
 		end
 	end
 
-	if not no_ret then
-		return
-	end
+	connection_map[id] = entry
 
-	i += 1
-	instance:SetAttribute(ATTRIBUTE_NAME, i)
-	instanceMap[i] = instance
+	return remove
 end
 
-game.DescendantAdded:Connect(onInstance)
-
-for _, instance: Instance in game:GetDescendants() do
-	onInstance(instance)
+function get(id: number): { libtypes.Connection }?
+	return connection_map[id]
 end
-]]></string>
-          </Properties>
-        </Item>
-        <Item class="ModuleScript" referent="6">
-          <Properties>
-            <string name="Name">shared</string>
-            <string name="Source"><![CDATA[return setmetatable({}, { __mode = "v" }) :: { [number]: Instance }
-]]></string>
-          </Properties>
-        </Item>
-      </Item>
-      <Item class="Folder" referent="7">
-        <Properties>
-          <string name="Name">middleware</string>
-        </Properties>
-      </Item>
-    </Item>
-    <Item class="Folder" referent="8">
-      <Properties>
-        <string name="Name">init_modules</string>
-      </Properties>
-      <Item class="ModuleScript" referent="9">
-        <Properties>
-          <string name="Name">client</string>
-          <string name="Source"><![CDATA[@native
-function init() end
 
-return init
+return table.freeze({
+	add = add,
+	get = get,
+})
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="10">
-        <Properties>
-          <string name="Name">server</string>
-          <string name="Source"><![CDATA[@native
-function init() end
-
-return init
-]]></string>
-        </Properties>
-      </Item>
-    </Item>
-    <Item class="Folder" referent="11">
-      <Properties>
-        <string name="Name">util</string>
-      </Properties>
       <Item class="ModuleScript" referent="12">
         <Properties>
           <string name="Name">id-tracker</string>
@@ -228,10 +991,33 @@ return table.freeze({
       </Item>
       <Item class="ModuleScript" referent="13">
         <Properties>
-          <string name="Name">remote-tracker</string>
-          <string name="Source"><![CDATA[local remotes = {}
+          <string name="Name">ref-tracker</string>
+          <string name="Source"><![CDATA[local current: { unknown }
 
-function map(key: string, remote: any) end
+return table.freeze({
+	set = function(refs)
+		current = refs
+	end,
+	get = function()
+		return current
+	end,
+})
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="14">
+        <Properties>
+          <string name="Name">remote-tracker</string>
+          <string name="Source"><![CDATA[local libtypes = require(script.Parent.Parent.util.libtypes)
+local remotes: { [number]: libtypes.Intermediate<any, any, any> } = {}
+
+function map(key: number, remote: any)
+	if remote[key] then
+		warn(`REMOTE #{key} ALREADY EXISTS`)
+		return
+	end
+	remotes[key] = remote
+end
 
 function get()
 	return remotes
@@ -244,13 +1030,587 @@ return {
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+    </Item>
+    <Item class="Folder" referent="15">
+      <Properties>
+        <string name="Name">util</string>
+      </Properties>
+      <Item class="ModuleScript" referent="16">
         <Properties>
-          <string name="Name">types</string>
-          <string name="Source"><![CDATA[export type Function<T = never> = {}
-export type Event<T = never> = {}
+          <string name="Name">callbacks</string>
+          <string name="Source"><![CDATA[local libtypes = require(script.Parent.libtypes)
+local callbacks: { [number]: libtypes.Callback } = {}
+
+function set(id: number, cb: libtypes.Callback)
+	if callbacks[id] then
+		warn(`CALLBACKS CAN ONLY BE SET ONCE! ID #{id}`)
+		return
+	end
+	callbacks[id] = cb
+end
+
+function get(id: number): libtypes.Callback?
+	return callbacks[id]
+end
+
+return table.freeze({
+	set = set,
+	get = get,
+})
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="17">
+        <Properties>
+          <string name="Name">dump</string>
+          <string name="Source"><![CDATA[local libtypes = require(script.Parent.libtypes)
+return @native function(b: libtypes.Buffer): (buffer, { unknown }?)
+	local cursor = b.cursor
+	local dumpBuffer = buffer.create(cursor)
+	buffer.copy(dumpBuffer, 0, b.inner, 0, cursor)
+	return dumpBuffer, if #b.references > 0 then b.references else nil
+end
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="18">
+        <Properties>
+          <string name="Name">iter-and-convert</string>
+          <string name="Source"><![CDATA[local libtypes = require(script.Parent.libtypes)
+@native
+function iter_and_convert<T>(t: T & { [any]: any }, ctor: (libtypes.Intermediate) -> any): T
+	local result = {}
+
+	local function recursive_index(origin: { [any]: any }, write_to: { [any]: any })
+		for i, v in pairs(origin) do
+			local is_schema = v.__kind and v.id
+
+			if not is_schema then
+				local new_table = {}
+				write_to[i] = new_table
+				recursive_index(v, new_table)
+			end
+			write_to[i] = ctor(v)
+		end
+	end
+
+	recursive_index(t, result)
+
+	return table.freeze(result)
+end
+
+return iter_and_convert
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="19">
+        <Properties>
+          <string name="Name">large-buffer</string>
+          <string name="Source"><![CDATA[local constants = require(script.Parent.Parent.constants)
+
+local libtypes = require(script.Parent.libtypes)
+return @native function(): libtypes.Buffer
+	return {
+		size = constants.LARGE_BUFFER_SIZE,
+		inner = buffer.create(constants.LARGE_BUFFER_SIZE),
+		cursor = 0,
+		references = {},
+	}
+end
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="20">
+        <Properties>
+          <string name="Name">libtypes</string>
+          <string name="Source"><![CDATA[-- types:
+
+export type Buffer = {
+	cursor: number,
+	size: number,
+	references: { unknown },
+	inner: buffer,
+}
+
+export type function GetSchema(t: type, schemaindex: string)
+	return t:readproperty(types.singleton(schemaindex))
+end
+
+export type function GetNestedSchema(t: type)
+	local nt = types.newtable()
+	local function traverse(t: type, n: type)
+		for i, v in t:properties() do
+			local tx = GetSchema(v.read or types.never, "__T")
+			if tx:is("table") then
+				local ntx = types.newtable()
+				n:setproperty(types.singleton(i:value()), ntx)
+				traverse(tx, ntx)
+			else
+				n:setproperty(types.singleton(i:value()), tx)
+			end
+		end
+	end
+	traverse(t, nt)
+
+	return nt
+end
+
+export type Middleware = (id: number, plr: Player) -> boolean
+export type Connection = (...any) -> ()
+export type Callback = (...any) -> any
+export type Cleanup = () -> ()
+
+export type Schema<T = nil> = {
+	read read: (buf: buffer, offset: number) -> (T, number),
+	read write: (input: T) -> (),
+	read __T: T,
+}
+
+export type Intermediate<T = nil, O = nil, K = never> = {
+	read schema: Schema<T>,
+	read schema_output: Schema<O>,
+	read __schema_output: O,
+	read __schema: T,
+	read __kind: K,
+	read id: number,
+	read reliable: boolean,
+}
+
+export type ClientRemote<T = nil> = {
+	read connect: (self: any, callback: (T) -> ()) -> Cleanup,
+	read fire: (any, T) -> (),
+	read __T: T,
+	read __kind: "event",
+}
+export type ClientFunction<T = nil, O = nil> = {
+	read invoke: (any, T) -> (boolean, O),
+	read __T: T,
+	read __O: O,
+	read __kind: "function",
+}
+export type ServerRemote<T = nil> = {
+	read connect: (self: any, callback: (Player, T) -> ()) -> Cleanup,
+	read fire: (any, Player, T) -> (),
+	read fire_all: (any, T) -> (),
+	read __T: T,
+	read __kind: "event",
+}
+export type ServerFunction<T = nil, O = nil> = {
+	read set_callback: (any, (Player, T) -> O) -> (),
+	read __T: T,
+	read __O: O,
+	read __kind: "function",
+}
+
+type function ClientSearchAndReplace(input: type, relative_write_to: type): ()
+	assert(input:is("table"), "NOT A TABLE")
+
+	for i, v in input:properties() do
+		local t = assert(v.read)
+
+		local schema = GetSchema(t, "__schema")
+		local schema_output = GetSchema(t, "__schema_output")
+		if schema then -- is Intermediate
+			local substituted: type
+			do
+				local remote_kind = t:readproperty(types.singleton("__kind"))
+				assert(remote_kind, "FAILED TO GET KIND")
+				remote_kind = remote_kind:value()
+				if remote_kind == "function" then
+					substituted = ClientFunction(schema, schema_output or types.singleton(nil))
+				elseif remote_kind == "event" then
+					substituted = ClientRemote(schema)
+				end
+			end
+			assert(substituted, "NO SUBSTITUTE")
+			relative_write_to:setreadproperty(i, substituted)
+		else
+			local tempnt = types.newtable()
+			relative_write_to:setreadproperty(i, tempnt)
+			ClientSearchAndReplace(t, tempnt)
+		end
+	end
+end
+
+type function ServerSearchAndReplace(input: type, relative_write_to: type): ()
+	assert(input:is("table"), "NOT A TABLE")
+
+	for i, v in input:properties() do
+		local t = assert(v.read)
+
+		local schema = GetSchema(t, "__schema")
+		local schema_output = GetSchema(t, "__schema_output")
+		if schema then -- is Intermediate
+			local substituted: type
+			do
+				local remote_kind = t:readproperty(types.singleton("__kind"))
+				assert(remote_kind, "FAILED TO GET KIND")
+				remote_kind = remote_kind:value()
+				if remote_kind == "function" then
+					substituted = ServerFunction(schema, schema_output or types.singleton(nil))
+				elseif remote_kind == "event" then
+					substituted = ServerRemote(schema)
+				end
+			end
+			assert(substituted, "NO SUBSTITUTE")
+			relative_write_to:setreadproperty(i, substituted)
+		else
+			local tempnt = types.newtable()
+			relative_write_to:setreadproperty(i, tempnt)
+			ServerSearchAndReplace(t, tempnt)
+		end
+	end
+end
+
+export type function ReplicateClient(original: type)
+	local ot = types.newtable()
+	ClientSearchAndReplace(original, ot)
+	return ot
+end
+
+export type function ReplicateServer(original: type)
+	local ot = types.newtable()
+	ServerSearchAndReplace(original, ot)
+	return ot
+end
 
 return nil
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="21">
+        <Properties>
+          <string name="Name">logger</string>
+          <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
+local is_debug = RunService:IsStudio()
+local template = "[sendbufs]: %s"
+
+function white(...: string)
+	if is_debug then
+		return
+	end
+	print(template:format(table.concat({ ... }, ", ")))
+end
+
+function red(...: string)
+	error(template:format(table.concat({ ... }, ", ")))
+end
+
+function orange(...: string)
+	if is_debug then
+		return
+	end
+	warn(template:format(table.concat({ ... }, ", ")))
+end
+
+function errorif(cond: boolean, ...: string)
+	if cond then
+		red(...)
+	end
+end
+
+return table.freeze({
+	errorif = errorif,
+	white = white,
+	red = red,
+	orange = orange,
+})
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="22">
+        <Properties>
+          <string name="Name">read-client</string>
+          <string name="Source"><![CDATA[local connections = require(script.Parent.Parent.trackers.connections)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
+local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
+
+local libtypes = require(script.Parent.libtypes)
+return @native function(b: buffer)
+	local sb: libtypes.Buffer = {
+		inner = b,
+		references = ref_tracker.get() or {},
+		size = buffer.len(b),
+		cursor = 0,
+	}
+	while sb.cursor < sb.size do
+		local id = buffer.readu8(b, sb.cursor)
+		local remo = remote_tracker.get()[id]
+		local listeners = connections.get(id)
+		sb.cursor += 1
+		local value, nc = remo.schema.read(sb.inner, sb.cursor)
+		sb.cursor += nc
+		if remo.__kind == "event" and listeners ~= nil then
+			for i, v in listeners do
+				task.spawn(v, value)
+			end
+		end
+	end
+end
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="23">
+        <Properties>
+          <string name="Name">read-server-remote-function</string>
+          <string name="Source"><![CDATA[local middleware = require(script.Parent.Parent.features.middleware)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
+local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
+local callbacks = require(script.Parent.callbacks)
+local dump = require(script.Parent.dump)
+local libtypes = require(script.Parent.libtypes)
+local writer = require(script.Parent.writer)
+local small_buffer = require(script.Parent["small-buffer"])
+
+return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
+	local sb: libtypes.Buffer = {
+		inner = b,
+		references = ref_tracker.get() or {},
+		size = buffer.len(b),
+		cursor = 0,
+	}
+	while sb.cursor < sb.size do
+		local id = buffer.readu8(b, sb.cursor)
+		local remo = remote_tracker.get()[id]
+
+		if remo.__kind ~= "function" then
+			warn(`INVALID FUNCTION ID! #{id}`)
+			return false, nil, nil
+		end
+
+		sb.cursor += 1
+		local value, nc = remo.schema.read(sb.inner, sb.cursor)
+		sb.cursor += nc
+
+		local callback = callbacks.get(id)
+
+		if not callback then
+			warn(`UNHANDLED REMOTE FUNCTION! #{id}`)
+			return false, nil, nil
+		end
+
+		if not middleware.run_middleware(id, plr) then
+			return false, nil, nil
+		end
+		local success, res = pcall(callback, plr, value)
+
+		if not success then
+			warn(`CALLBACK FAILED: {res}`)
+			return false, nil, nil
+		end
+
+		local buf = small_buffer()
+		writer.load(buf)
+		remo.schema_output.write(res)
+		local r, refs = dump(writer.export())
+		return true, r, refs
+	end
+	return false, nil, nil
+end
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="24">
+        <Properties>
+          <string name="Name">read-server</string>
+          <string name="Source"><![CDATA[local middleware = require(script.Parent.Parent.features.middleware)
+local connections = require(script.Parent.Parent.trackers.connections)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
+local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
+
+local libtypes = require(script.Parent.libtypes)
+return @native function(b: buffer, plr: Player)
+	local sb: libtypes.Buffer = {
+		inner = b,
+		references = ref_tracker.get() or {},
+		size = buffer.len(b),
+		cursor = 0,
+	}
+	while sb.cursor < sb.size do
+		local id = buffer.readu8(b, sb.cursor)
+		local remo = remote_tracker.get()[id]
+		local listeners = connections.get(id)
+
+		sb.cursor += 1
+		local value, nc = remo.schema.read(sb.inner, sb.cursor)
+		sb.cursor += nc
+
+		warn(remo, listeners)
+		if remo.__kind == "event" and listeners ~= nil then
+			if not middleware.run_middleware(id, plr) then
+				continue
+			end
+			warn(listeners, "FIRING!")
+			for i, v in listeners do
+				task.spawn(v, plr, value)
+			end
+		end
+	end
+end
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="25">
+        <Properties>
+          <string name="Name">small-buffer</string>
+          <string name="Source"><![CDATA[local constants = require(script.Parent.Parent.constants)
+
+local libtypes = require(script.Parent.libtypes)
+return @native function(): libtypes.Buffer
+	return {
+		size = constants.MIN_BUFFER_SIZE,
+		inner = buffer.create(constants.MIN_BUFFER_SIZE),
+		cursor = 0,
+		references = {},
+	}
+end
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="26">
+        <Properties>
+          <string name="Name">writer</string>
+          <string name="Source"><![CDATA[--!native
+--!optimize 2
+local libtypes = require(script.Parent.libtypes)
+
+local current: libtypes.Buffer
+
+local size: number
+local cursor: number
+local inner: buffer
+local references: { [number]: unknown }
+
+local function alloc(bytes: number)
+	if not (cursor + bytes >= size) then
+		return
+	end
+
+	size = math.floor(size * 1.5)
+
+	local newBuffer = buffer.create(size)
+	buffer.copy(newBuffer, 0, inner)
+
+	inner = newBuffer
+end
+
+local function dyn_alloc(bytes: number)
+	while cursor + bytes >= size do
+		size = math.floor(size * 1.5)
+	end
+
+	local newBuffer = buffer.create(size)
+	buffer.copy(newBuffer, 0, inner)
+
+	inner = newBuffer
+end
+
+local bufferWriter = {}
+
+bufferWriter.alloc = alloc
+bufferWriter.dyn_alloc = dyn_alloc
+
+function bufferWriter.u8(value: number)
+	alloc(1)
+	buffer.writeu8(inner, cursor, value)
+	cursor += 1
+end
+
+function bufferWriter.i8(value: number)
+	alloc(1)
+	buffer.writei8(inner, cursor, value)
+	cursor += 1
+end
+
+-- this exists solely for the unknown and instance data type. Will likely be obselete soon enough
+function bufferWriter.reference(value: any)
+	table.insert(references, value)
+	local index = #references
+
+	buffer.writeu8(inner, cursor, index)
+	cursor += 1
+end
+
+function bufferWriter.u16(value: number)
+	alloc(2)
+	buffer.writeu16(inner, cursor, value)
+	cursor += 2
+end
+
+function bufferWriter.i16(value: number)
+	alloc(2)
+	buffer.writeu16(inner, cursor, value)
+	cursor += 2
+end
+
+function bufferWriter.u32(value: number)
+	alloc(4)
+	buffer.writeu32(inner, cursor, value)
+	cursor += 4
+end
+
+function bufferWriter.writestring(value: string)
+	buffer.writestring(inner, cursor, value)
+	cursor += string.len(value)
+end
+
+function bufferWriter.i32(value: number)
+	alloc(4)
+	buffer.writei32(inner, cursor, value)
+	cursor += 4
+end
+
+function bufferWriter.f32NoAlloc(value: number)
+	buffer.writef32(inner, cursor, value)
+	cursor += 4
+end
+
+function bufferWriter.f64NoAlloc(value: number)
+	buffer.writef64(inner, cursor, value)
+	cursor += 4
+end
+
+function bufferWriter.f32(value: number)
+	alloc(4)
+	buffer.writef32(inner, cursor, value)
+	cursor += 4
+end
+
+function bufferWriter.f64(value: number)
+	alloc(8)
+	buffer.writef64(inner, cursor, value)
+	cursor += 8
+end
+
+function bufferWriter.copy(value)
+	buffer.copy(inner, cursor, value)
+	cursor += buffer.len(value)
+end
+
+function bufferWriter.bool(val: boolean)
+	alloc(1)
+	buffer.writeu8(inner, cursor, if val then 1 else 0)
+	cursor += 1
+end
+
+function bufferWriter.load(channel: libtypes.Buffer)
+	current = channel
+	size = channel.size
+	cursor = channel.cursor
+	references = channel.references
+	inner = channel.inner
+end
+
+function bufferWriter.export()
+	current.size = size
+	current.cursor = cursor
+	current.references = references
+	current.inner = inner
+
+	return current
+end
+
+return bufferWriter
 ]]></string>
         </Properties>
       </Item>

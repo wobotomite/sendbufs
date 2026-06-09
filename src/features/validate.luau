@@ -1,4 +1,4 @@
-return function(b: any, refs: { unknown }?)
+return @native function(b: buffer, refs: { unknown }?)
 	if refs and typeof(refs) ~= "table" then
 		return false
 	end
