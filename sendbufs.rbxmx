@@ -32,6 +32,8 @@ return table.freeze({
 
 	EVENT_FOLDER = game:GetService("ReplicatedStorage"),
 
+	IS_DEBUG_ATTRIBUTE = "IS_DEBUG",
+
 	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
 
 	-- SERDES_WHITELIST = table.freeze({
@@ -1283,7 +1285,9 @@ return nil
         <Properties>
           <string name="Name">logger</string>
           <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
-local is_debug = RunService:IsStudio()
+
+local constants = require(script.Parent.Parent.constants)
+local is_debug = RunService:IsStudio() or (workspace:GetAttribute(constants.IS_DEBUG_ATTRIBUTE) == true)
 local template = "[sendbufs]:"
 
 function white(...: string)
@@ -1300,16 +1304,15 @@ function orange(...: string)
 	warn(template, ...)
 end
 
-function errorif(cond: boolean, ...: string)
+function errorif(cond: boolean, str: string)
 	if cond then
-		error(...)
+		error(str)
 	end
 end
 
 return table.freeze({
 	errorif = errorif,
 	white = white,
-	red = red,
 	orange = orange,
 })
 ]]></string>
