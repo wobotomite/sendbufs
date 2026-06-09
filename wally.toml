@@ -1,7 +1,8 @@
 [package]
 name = "wobotomite/sendbufs"
-version = "1.0.0"
+version = "1.0.1"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
+include = ["src"]
 
 [dependencies]
