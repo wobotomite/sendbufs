@@ -1530,12 +1530,11 @@ function bufferWriter.i8(value: number)
 end
 
 function bufferWriter.reference(value: any)
-	if not value then
+	if value == nil then
 		value = constants.VOID
 	end
 	table.insert(references, value)
 	local index = #references
-	print("added", value, references)
 	buffer.writeu8(inner, cursor, index)
 	cursor += 1
 end
