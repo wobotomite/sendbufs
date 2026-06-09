@@ -1280,46 +1280,6 @@ return nil
       </Item>
       <Item class="ModuleScript" referent="21">
         <Properties>
-          <string name="Name">logger</string>
-          <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
-local is_debug = RunService:IsStudio()
-local template = "[sendbufs]: %s"
-
-function white(...: string)
-	if is_debug then
-		return
-	end
-	print(template:format(table.concat({ ... }, ", ")))
-end
-
-function red(...: string)
-	error(template:format(table.concat({ ... }, ", ")))
-end
-
-function orange(...: string)
-	if is_debug then
-		return
-	end
-	warn(template:format(table.concat({ ... }, ", ")))
-end
-
-function errorif(cond: boolean, ...: string)
-	if cond then
-		red(...)
-	end
-end
-
-return table.freeze({
-	errorif = errorif,
-	white = white,
-	red = red,
-	orange = orange,
-})
-]]></string>
-        </Properties>
-      </Item>
-      <Item class="ModuleScript" referent="22">
-        <Properties>
           <string name="Name">read-client</string>
           <string name="Source"><![CDATA[local connections = require(script.Parent.Parent.trackers.connections)
 local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
@@ -1350,7 +1310,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="23">
+      <Item class="ModuleScript" referent="22">
         <Properties>
           <string name="Name">read-server-remote-function</string>
           <string name="Source"><![CDATA[local middleware = require(script.Parent.Parent.features.middleware)
@@ -1410,7 +1370,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="24">
+      <Item class="ModuleScript" referent="23">
         <Properties>
           <string name="Name">read-server</string>
           <string name="Source"><![CDATA[local middleware = require(script.Parent.Parent.features.middleware)
@@ -1450,7 +1410,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="25">
+      <Item class="ModuleScript" referent="24">
         <Properties>
           <string name="Name">small-buffer</string>
           <string name="Source"><![CDATA[local constants = require(script.Parent.Parent.constants)
@@ -1467,7 +1427,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="26">
+      <Item class="ModuleScript" referent="25">
         <Properties>
           <string name="Name">writer</string>
           <string name="Source"><![CDATA[--!native
