@@ -34,6 +34,8 @@ return table.freeze({
 
 	IS_DEBUG_ATTRIBUTE = "IS_DEBUG",
 
+	VOID = "\135\135\174\174",
+
 	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
 
 	-- SERDES_WHITELIST = table.freeze({
@@ -93,7 +95,8 @@ return table.freeze({
       <Item class="ModuleScript" referent="4">
         <Properties>
           <string name="Name">schema</string>
-          <string name="Source"><![CDATA[local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
+          <string name="Source"><![CDATA[local constants = require(script.Parent.Parent.constants)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local libtypes = require(script.Parent.Parent.util.libtypes)
 local writer = require(script.Parent.Parent.util.writer)
 
@@ -487,7 +490,11 @@ function ref(): libtypes.Schema<any?>
 			if not ref_list then
 				return nil, 1
 			end
-			return ref_list[buffer.readu8(b, cursor)], 1
+			local obtained_ref = ref_list[buffer.readu8(b, cursor)]
+			if obtained_ref == constants.VOID then
+				obtained_ref = nil
+			end
+			return obtained_ref, 1
 		end,
 		write = function(v)
 			alloc(1)
@@ -1471,6 +1478,7 @@ end
           <string name="Name">writer</string>
           <string name="Source"><![CDATA[--!native
 --!optimize 2
+local constants = require(script.Parent.Parent.constants)
 local libtypes = require(script.Parent.libtypes)
 
 local current: libtypes.Buffer
@@ -1521,11 +1529,13 @@ function bufferWriter.i8(value: number)
 	cursor += 1
 end
 
--- this exists solely for the unknown and instance data type. Will likely be obselete soon enough
 function bufferWriter.reference(value: any)
+	if not value then
+		value = constants.VOID
+	end
 	table.insert(references, value)
 	local index = #references
-
+	print("added", value, references)
 	buffer.writeu8(inner, cursor, index)
 	cursor += 1
 end

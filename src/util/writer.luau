@@ -1,5 +1,6 @@
 --!native
 --!optimize 2
+local constants = require(script.Parent.Parent.constants)
 local libtypes = require(script.Parent.libtypes)
 
 local current: libtypes.Buffer
@@ -50,11 +51,13 @@ function bufferWriter.i8(value: number)
 	cursor += 1
 end
 
--- this exists solely for the unknown and instance data type. Will likely be obselete soon enough
 function bufferWriter.reference(value: any)
+	if not value then
+		value = constants.VOID
+	end
 	table.insert(references, value)
 	local index = #references
-
+	print("added", value, references)
 	buffer.writeu8(inner, cursor, index)
 	cursor += 1
 end

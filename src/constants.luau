@@ -11,6 +11,8 @@ return table.freeze({
 
 	IS_DEBUG_ATTRIBUTE = "IS_DEBUG",
 
+	VOID = "\135\135\174\174",
+
 	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
 
 	-- SERDES_WHITELIST = table.freeze({

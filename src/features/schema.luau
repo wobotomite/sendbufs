@@ -1,3 +1,4 @@
+local constants = require(script.Parent.Parent.constants)
 local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local libtypes = require(script.Parent.Parent.util.libtypes)
 local writer = require(script.Parent.Parent.util.writer)
@@ -392,7 +393,11 @@ function ref(): libtypes.Schema<any?>
 			if not ref_list then
 				return nil, 1
 			end
-			return ref_list[buffer.readu8(b, cursor)], 1
+			local obtained_ref = ref_list[buffer.readu8(b, cursor)]
+			if obtained_ref == constants.VOID then
+				obtained_ref = nil
+			end
+			return obtained_ref, 1
 		end,
 		write = function(v)
 			alloc(1)
