@@ -18,15 +18,14 @@ function orange(...: string)
 	warn(template, ...)
 end
 
-function errorif(cond: boolean, ...: string)
+function errorif(cond: boolean, str: string)
 	if cond then
-		error(...)
+		error(str)
 	end
 end
 
 return table.freeze({
 	errorif = errorif,
 	white = white,
-	red = red,
 	orange = orange,
 })
