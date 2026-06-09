@@ -20,12 +20,10 @@ return @native function(b: buffer, plr: Player)
 		local value, nc = remo.schema.read(sb.inner, sb.cursor)
 		sb.cursor += nc
 
-		warn(remo, listeners)
 		if remo.__kind == "event" and listeners ~= nil then
 			if not middleware.run_middleware(id, plr) then
 				continue
 			end
-			warn(listeners, "FIRING!")
 			for i, v in listeners do
 				task.spawn(v, plr, value)
 			end

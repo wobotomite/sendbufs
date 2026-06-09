@@ -908,7 +908,6 @@ function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil
 end
 
 function fn<T, K>(input: libtypes.Schema<T>?, output: libtypes.Schema<K>?): libtypes.Intermediate<T, K, "function">
-	warn(output, "IS NULL?")
 	local t = table.freeze({
 		__kind = "function" :: "function",
 		__schema = nil :: T,
@@ -1009,11 +1008,12 @@ return table.freeze({
         <Properties>
           <string name="Name">remote-tracker</string>
           <string name="Source"><![CDATA[local libtypes = require(script.Parent.Parent.util.libtypes)
+local logger = require(script.Parent.Parent.util.logger)
 local remotes: { [number]: libtypes.Intermediate<any, any, any> } = {}
 
 function map(key: number, remote: any)
 	if remote[key] then
-		warn(`REMOTE #{key} ALREADY EXISTS`)
+		logger.orange(`REMOTE #{key} ALREADY EXISTS`)
 		return
 	end
 	remotes[key] = remote
@@ -1039,11 +1039,12 @@ return {
         <Properties>
           <string name="Name">callbacks</string>
           <string name="Source"><![CDATA[local libtypes = require(script.Parent.libtypes)
+local logger = require(script.Parent.logger)
 local callbacks: { [number]: libtypes.Callback } = {}
 
 function set(id: number, cb: libtypes.Callback)
 	if callbacks[id] then
-		warn(`CALLBACKS CAN ONLY BE SET ONCE! ID #{id}`)
+		logger.orange(`CALLBACKS CAN ONLY BE SET ONCE! ID #{id}`)
 		return
 	end
 	callbacks[id] = cb
@@ -1280,6 +1281,42 @@ return nil
       </Item>
       <Item class="ModuleScript" referent="21">
         <Properties>
+          <string name="Name">logger</string>
+          <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
+local is_debug = RunService:IsStudio()
+local template = "[sendbufs]:"
+
+function white(...: string)
+	if is_debug then
+		return
+	end
+	print(template, ...)
+end
+
+function orange(...: string)
+	if is_debug then
+		return
+	end
+	warn(template, ...)
+end
+
+function errorif(cond: boolean, ...: string)
+	if cond then
+		error(...)
+	end
+end
+
+return table.freeze({
+	errorif = errorif,
+	white = white,
+	red = red,
+	orange = orange,
+})
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="22">
+        <Properties>
           <string name="Name">read-client</string>
           <string name="Source"><![CDATA[local connections = require(script.Parent.Parent.trackers.connections)
 local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
@@ -1310,7 +1347,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="22">
+      <Item class="ModuleScript" referent="23">
         <Properties>
           <string name="Name">read-server-remote-function</string>
           <string name="Source"><![CDATA[local middleware = require(script.Parent.Parent.features.middleware)
@@ -1319,6 +1356,7 @@ local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local callbacks = require(script.Parent.callbacks)
 local dump = require(script.Parent.dump)
 local libtypes = require(script.Parent.libtypes)
+local logger = require(script.Parent.logger)
 local writer = require(script.Parent.writer)
 local small_buffer = require(script.Parent["small-buffer"])
 
@@ -1334,7 +1372,7 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		local remo = remote_tracker.get()[id]
 
 		if remo.__kind ~= "function" then
-			warn(`INVALID FUNCTION ID! #{id}`)
+			logger.orange(`INVALID FUNCTION ID! #{id}`)
 			return false, nil, nil
 		end
 
@@ -1345,7 +1383,7 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		local callback = callbacks.get(id)
 
 		if not callback then
-			warn(`UNHANDLED REMOTE FUNCTION! #{id}`)
+			logger.orange(`UNHANDLED REMOTE FUNCTION! #{id}`)
 			return false, nil, nil
 		end
 
@@ -1355,7 +1393,7 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		local success, res = pcall(callback, plr, value)
 
 		if not success then
-			warn(`CALLBACK FAILED: {res}`)
+			logger.orange(`CALLBACK FAILED: {res}`)
 			return false, nil, nil
 		end
 
@@ -1370,7 +1408,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="23">
+      <Item class="ModuleScript" referent="24">
         <Properties>
           <string name="Name">read-server</string>
           <string name="Source"><![CDATA[local middleware = require(script.Parent.Parent.features.middleware)
@@ -1395,12 +1433,10 @@ return @native function(b: buffer, plr: Player)
 		local value, nc = remo.schema.read(sb.inner, sb.cursor)
 		sb.cursor += nc
 
-		warn(remo, listeners)
 		if remo.__kind == "event" and listeners ~= nil then
 			if not middleware.run_middleware(id, plr) then
 				continue
 			end
-			warn(listeners, "FIRING!")
 			for i, v in listeners do
 				task.spawn(v, plr, value)
 			end
@@ -1410,7 +1446,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="24">
+      <Item class="ModuleScript" referent="25">
         <Properties>
           <string name="Name">small-buffer</string>
           <string name="Source"><![CDATA[local constants = require(script.Parent.Parent.constants)
@@ -1427,7 +1463,7 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="25">
+      <Item class="ModuleScript" referent="26">
         <Properties>
           <string name="Name">writer</string>
           <string name="Source"><![CDATA[--!native

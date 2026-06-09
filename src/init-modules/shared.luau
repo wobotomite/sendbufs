@@ -32,7 +32,6 @@ function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil
 end
 
 function fn<T, K>(input: libtypes.Schema<T>?, output: libtypes.Schema<K>?): libtypes.Intermediate<T, K, "function">
-	warn(output, "IS NULL?")
 	local t = table.freeze({
 		__kind = "function" :: "function",
 		__schema = nil :: T,

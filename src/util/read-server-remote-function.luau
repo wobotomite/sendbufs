@@ -4,6 +4,7 @@ local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local callbacks = require(script.Parent.callbacks)
 local dump = require(script.Parent.dump)
 local libtypes = require(script.Parent.libtypes)
+local logger = require(script.Parent.logger)
 local writer = require(script.Parent.writer)
 local small_buffer = require(script.Parent["small-buffer"])
 
@@ -19,7 +20,7 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		local remo = remote_tracker.get()[id]
 
 		if remo.__kind ~= "function" then
-			warn(`INVALID FUNCTION ID! #{id}`)
+			logger.orange(`INVALID FUNCTION ID! #{id}`)
 			return false, nil, nil
 		end
 
@@ -30,7 +31,7 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		local callback = callbacks.get(id)
 
 		if not callback then
-			warn(`UNHANDLED REMOTE FUNCTION! #{id}`)
+			logger.orange(`UNHANDLED REMOTE FUNCTION! #{id}`)
 			return false, nil, nil
 		end
 
@@ -40,7 +41,7 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		local success, res = pcall(callback, plr, value)
 
 		if not success then
-			warn(`CALLBACK FAILED: {res}`)
+			logger.orange(`CALLBACK FAILED: {res}`)
 			return false, nil, nil
 		end
 
