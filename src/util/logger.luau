@@ -1,5 +1,7 @@
 local RunService = game:GetService("RunService")
-local is_debug = RunService:IsStudio()
+
+local constants = require(script.Parent.Parent.constants)
+local is_debug = RunService:IsStudio() or (workspace:GetAttribute(constants.IS_DEBUG_ATTRIBUTE) == true)
 local template = "[sendbufs]:"
 
 function white(...: string)
