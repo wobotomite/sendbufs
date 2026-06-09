@@ -9,7 +9,7 @@ return table.freeze({
 
 	EVENT_FOLDER = game:GetService("ReplicatedStorage"),
 
-	IS_DEBUG_ATTRIBUTE = "IS_DEBUG"
+	IS_DEBUG_ATTRIBUTE = "IS_DEBUG",
 
 	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
 
