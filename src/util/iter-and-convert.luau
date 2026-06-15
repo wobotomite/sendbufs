@@ -11,6 +11,7 @@ function iter_and_convert<T>(t: T & { [any]: any }, ctor: (libtypes.Intermediate
 				local new_table = {}
 				write_to[i] = new_table
 				recursive_index(v, new_table)
+				continue
 			end
 			write_to[i] = ctor(v)
 		end
