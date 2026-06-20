@@ -32,7 +32,7 @@ end
 
 export type Middleware = (id: number, plr: Player) -> boolean
 export type Connection = (...any) -> ()
-export type Callback = (...any) -> any
+export type Callback = (...any) -> (boolean, any)
 export type Cleanup = () -> ()
 
 export type Schema<T = nil> = {
@@ -71,7 +71,7 @@ export type ServerRemote<T = nil> = {
 	read __kind: "event",
 }
 export type ServerFunction<T = nil, O = nil> = {
-	read set_callback: (any, (Player, T) -> O) -> (),
+	read set_callback: (any, (Player, T) -> (boolean, O)) -> (),
 	read __T: T,
 	read __O: O,
 	read __kind: "function",

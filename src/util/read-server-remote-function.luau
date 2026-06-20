@@ -38,7 +38,9 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		if not middleware.run_middleware(id, plr) then
 			return false, nil, nil
 		end
-		local success, res = pcall(callback, plr, value)
+		local success1, success2, res = pcall(callback, plr, value)
+
+		local success = success2 and success1
 
 		if not success then
 			logger.orange(`CALLBACK FAILED: {res}`)
