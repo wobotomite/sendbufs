@@ -1179,7 +1179,7 @@ end
 
 export type Middleware = (id: number, plr: Player) -> boolean
 export type Connection = (...any) -> ()
-export type Callback = (...any) -> any
+export type Callback = (...any) -> (boolean, any)
 export type Cleanup = () -> ()
 
 export type Schema<T = nil> = {
@@ -1218,7 +1218,7 @@ export type ServerRemote<T = nil> = {
 	read __kind: "event",
 }
 export type ServerFunction<T = nil, O = nil> = {
-	read set_callback: (any, (Player, T) -> O) -> (),
+	read set_callback: (any, (Player, T) -> (boolean, O)) -> (),
 	read __T: T,
 	read __O: O,
 	read __kind: "function",
@@ -1412,7 +1412,9 @@ return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?
 		if not middleware.run_middleware(id, plr) then
 			return false, nil, nil
 		end
-		local success, res = pcall(callback, plr, value)
+		local success1, success2, res = pcall(callback, plr, value)
+
+		local success = success2 and success1
 
 		if not success then
 			logger.orange(`CALLBACK FAILED: {res}`)
