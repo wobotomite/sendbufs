@@ -5,14 +5,14 @@ local is_debug = RunService:IsStudio() or (workspace:GetAttribute(constants.IS_D
 local template = "[sendbufs]:"
 
 function white(...: string)
-	if is_debug then
+	if not is_debug then
 		return
 	end
 	print(template, ...)
 end
 
 function orange(...: string)
-	if is_debug then
+	if not is_debug then
 		return
 	end
 	warn(template, ...)
