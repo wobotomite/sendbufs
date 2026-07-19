@@ -1,4 +1,4 @@
-# sendbufs v1.0.0
+# Intro:
 sendbufs is a networking library with buffer compression and type validation via schemas.
 ## Getting Started
 1. create a shared network definitions script (i.e. ReplicatedStorage/network-definitions.luau)
