@@ -19,6 +19,7 @@ return table.freeze({
 	create_client = client,
 	create_server = server,
 	event = shared.event,
+	unreliable = shared.unreliable,
 	fn = shared.fn,
 	middleware = middleware.middleware,
 	schema = schema,

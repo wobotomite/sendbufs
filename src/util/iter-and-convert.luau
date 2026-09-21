@@ -1,6 +1,6 @@
 local libtypes = require(script.Parent.libtypes)
 @native
-function iter_and_convert<T>(t: T & { [any]: any }, ctor: (libtypes.Intermediate) -> any): T
+local function iter_and_convert<T>(t: T & { [any]: any }, ctor: (libtypes.Intermediate) -> any): T
 	local result = {}
 
 	local function recursive_index(origin: { [any]: any }, write_to: { [any]: any })

@@ -10,82 +10,106 @@ local cursor: number
 local inner: buffer
 local references: { [number]: unknown }
 
-local function alloc(bytes: number)
-	if not (cursor + bytes >= size) then
-		return
-	end
-
-	size = math.floor(size * 1.5)
-
-	local newBuffer = buffer.create(size)
-	buffer.copy(newBuffer, 0, inner)
-
-	inner = newBuffer
-end
-
-local function dyn_alloc(bytes: number)
-	while cursor + bytes >= size do
-		size = math.floor(size * 1.5)
-	end
+local function grow(bytes: number)
+	local needed = cursor + bytes
+	repeat
+		size *= 2
+	until size >= needed
 
 	local newBuffer = buffer.create(size)
-	buffer.copy(newBuffer, 0, inner)
+	buffer.copy(newBuffer, 0, inner, 0, cursor)
 
 	inner = newBuffer
 end
 
 local bufferWriter = {}
 
-bufferWriter.alloc = alloc
-bufferWriter.dyn_alloc = dyn_alloc
+function bufferWriter.alloc(bytes: number)
+	if cursor + bytes > size then
+		grow(bytes)
+	end
+end
 
 function bufferWriter.u8(value: number)
-	alloc(1)
+	if cursor + 1 > size then
+		grow(1)
+	end
 	buffer.writeu8(inner, cursor, value)
 	cursor += 1
 end
 
 function bufferWriter.i8(value: number)
-	alloc(1)
+	if cursor + 1 > size then
+		grow(1)
+	end
 	buffer.writei8(inner, cursor, value)
 	cursor += 1
 end
 
 function bufferWriter.reference(value: any)
+	if cursor + 1 > size then
+		grow(1)
+	end
 	if value == nil then
 		value = constants.VOID
 	end
-	table.insert(references, value)
-	local index = #references
+	local index = #references + 1
+	references[index] = value
 	buffer.writeu8(inner, cursor, index)
 	cursor += 1
 end
 
 function bufferWriter.u16(value: number)
-	alloc(2)
+	if cursor + 2 > size then
+		grow(2)
+	end
 	buffer.writeu16(inner, cursor, value)
 	cursor += 2
 end
 
 function bufferWriter.i16(value: number)
-	alloc(2)
-	buffer.writeu16(inner, cursor, value)
+	if cursor + 2 > size then
+		grow(2)
+	end
+	buffer.writei16(inner, cursor, value)
 	cursor += 2
 end
 
 function bufferWriter.u32(value: number)
-	alloc(4)
+	if cursor + 4 > size then
+		grow(4)
+	end
 	buffer.writeu32(inner, cursor, value)
 	cursor += 4
 end
 
+-- LEB128: 7 bits per byte, so lengths under 128 cost one byte
+function bufferWriter.varint(value: number)
+	if cursor + 8 > size then
+		grow(8)
+	end
+	while value >= 128 do
+		buffer.writeu8(inner, cursor, value % 128 + 128)
+		cursor += 1
+		value //= 128
+	end
+	buffer.writeu8(inner, cursor, value)
+	cursor += 1
+end
+
 function bufferWriter.writestring(value: string)
+	local len = #value
+	if cursor + len > size then
+		grow(len)
+	end
 	buffer.writestring(inner, cursor, value)
-	cursor += string.len(value)
+	cursor += len
 end
 
 function bufferWriter.i32(value: number)
-	alloc(4)
+	if cursor + 4 > size then
+		grow(4)
+	end
 	buffer.writei32(inner, cursor, value)
 	cursor += 4
 end
@@ -97,17 +121,21 @@ end
 
 function bufferWriter.f64NoAlloc(value: number)
 	buffer.writef64(inner, cursor, value)
-	cursor += 4
+	cursor += 8
 end
 
 function bufferWriter.f32(value: number)
-	alloc(4)
+	if cursor + 4 > size then
+		grow(4)
+	end
 	buffer.writef32(inner, cursor, value)
 	cursor += 4
 end
 
 function bufferWriter.f64(value: number)
-	alloc(8)
+	if cursor + 8 > size then
+		grow(8)
+	end
 	buffer.writef64(inner, cursor, value)
 	cursor += 8
 end
@@ -118,7 +146,9 @@ function bufferWriter.copy(value)
 end
 
 function bufferWriter.bool(val: boolean)
-	alloc(1)
+	if cursor + 1 > size then
+		grow(1)
+	end
 	buffer.writeu8(inner, cursor, if val then 1 else 0)
 	cursor += 1
 end

@@ -1,5 +1,5 @@
 name = "wobotomite/sendbufs"
-version = "1.0.4"
+version = "1.1.0"
 description = "extensible networking lib with compression"
 authors = ["wobotomite"]
 repository = "https://www.github.com/wobotomite/sendbufs"

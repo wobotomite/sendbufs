@@ -1,24 +1,30 @@
-local RunService = game:GetService("RunService")
-
 local libtypes = require(script.Parent.Parent.util.libtypes)
+local logger = require(script.Parent.Parent.util.logger)
 
 local middleware_map: { [number]: { libtypes.Middleware } } = {}
 
-function middleware(t: libtypes.Intermediate<any, any, any>, mw: libtypes.Middleware)
+local function middleware(t: libtypes.Intermediate<any, any, any>, mw: libtypes.Middleware)
 	local entry = middleware_map[t.id] or {}
 	table.insert(entry, mw)
 	middleware_map[t.id] = entry
 end
-function get(id: number): { libtypes.Middleware }?
+local function get(id: number): { libtypes.Middleware }?
 	return middleware_map[id]
 end
 
-function run_middleware(id: number, plr: Player)
-	assert(RunService:IsServer(), "Middleware can only be called on the server!")
-	local mw = (get(id) or {}) :: { libtypes.Middleware }
-	for i, v in mw do
-		if not v(id, plr) then
-			return false
+local function run_middleware(id: number, plr: Player)
+	local mw = middleware_map[id]
+	if mw then
+		for _, v in mw do
+			-- a middleware that throws refuses
+			local ran, allowed = pcall(v, id, plr)
+			if not ran then
+				logger.orange(`MIDDLEWARE FAILED FOR #{id}: {allowed}`)
+				return false
+			end
+			if not allowed then
+				return false
+			end
 		end
 	end
 	return true

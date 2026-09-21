@@ -7,104 +7,95 @@ local connections = require(script.Parent.Parent.trackers.connections)
 local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local callbacks = require(script.Parent.Parent.util.callbacks)
 
-local dump = require(script.Parent.Parent.util.dump)
+local channel = require(script.Parent.Parent.util.channel)
 local libtypes = require(script.Parent.Parent.util.libtypes)
-local writer = require(script.Parent.Parent.util.writer)
 local iter_and_convert = require(script.Parent.Parent.util["iter-and-convert"])
-local large_buffer = require(script.Parent.Parent.util["large-buffer"])
 local read_server = require(script.Parent.Parent.util["read-server"])
 local read_server_remote_function = require(script.Parent.Parent.util["read-server-remote-function"])
+local remote_names = require(script.Parent.Parent.util["remote-names"])
 
-local load = writer.load
-local alloc = writer.alloc
-local u8 = writer.u8
-local export = writer.export
+local append = channel.append
 
 local __init = false
 
-@native
-function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateServer<T>
+local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateServer<T>
 	assert(not __init, "NETWORKING ALREADY STARTED")
 	__init = true
 
-	local max_buffer_size: number = max_buffer_size or constants.MAX_SERVER_BUFFER_SIZE
+	local max_size: number = max_buffer_size or constants.MAX_SERVER_BUFFER_SIZE
 
-	local mt = table.freeze({ __mode = "k" })
-
-	local players_reliable: { [Player]: libtypes.Buffer? } = {}
-	local players_unreliable: { [Player]: libtypes.Buffer? } = {}
-
-	local global_reliable = large_buffer()
-	local global_unreliable = large_buffer()
-
-	setmetatable(players_reliable, mt)
-	setmetatable(players_unreliable, mt)
-
-	local function append_all_reliable(id: number, writer: (any) -> (), data: any)
-		load(global_reliable or large_buffer())
-		alloc(1)
-		u8(id)
-		writer(data)
-		global_reliable = export()
-	end
-
-	local function append_all_unreliable(id: number, writer: (any) -> (), data: any)
-		load(global_unreliable or large_buffer())
-		alloc(1)
-		u8(id)
-		writer(data)
-		global_unreliable = export()
-	end
-
-	local function append_reliable(player: Player, id: number, writer: (any) -> (), data: any)
-		load(players_reliable[player] or large_buffer())
-		alloc(1)
-		u8(id)
-		writer(data)
-		players_reliable[player] = export()
-	end
-	local function append_unreliable(player: Player, id: number, writer: (any) -> (), data: any)
-		load(players_unreliable[player] or large_buffer())
-		alloc(1)
-		u8(id)
-		writer(data)
-		players_unreliable[player] = export()
-	end
+	local reliable_name, unreliable_name, function_name = remote_names(game.JobId)
 
 	local ReliableEvent = Instance.new("RemoteEvent")
-	ReliableEvent.Name = constants.RELIABLE_EVENT_NAME
+	ReliableEvent.Name = reliable_name
 	local UnreliableEvent = Instance.new("UnreliableRemoteEvent")
-	UnreliableEvent.Name = constants.UNRELIABLE_EVENT_NAME
+	UnreliableEvent.Name = unreliable_name
 	local RemoteFunction = Instance.new("RemoteFunction")
-	RemoteFunction.Name = constants.REMOTE_FUNCTION
+	RemoteFunction.Name = function_name
+
+	local global_reliable = channel.new(function(b, refs)
+		ReliableEvent:FireAllClients(b, refs)
+	end, math.huge)
+	local global_unreliable = channel.new(function(b, refs)
+		UnreliableEvent:FireAllClients(b, refs)
+	end, constants.MAX_UNRELIABLE_SIZE)
+
+	local players_reliable: { [Player]: libtypes.Channel } = {}
+	local players_unreliable: { [Player]: libtypes.Channel } = {}
+	-- players that left, so a late fire() does not open a channel nobody closes
+	local gone: { [Player]: boolean } = setmetatable({}, { __mode = "k" }) :: any
+
+	local function reliable_for(player: Player): libtypes.Channel?
+		local found = players_reliable[player]
+		if not found and not gone[player] then
+			found = channel.new(function(b, refs)
+				ReliableEvent:FireClient(player, b, refs)
+			end, math.huge)
+			players_reliable[player] = found
+		end
+		return found
+	end
+
+	local function unreliable_for(player: Player): libtypes.Channel?
+		local found = players_unreliable[player]
+		if not found and not gone[player] then
+			found = channel.new(function(b, refs)
+				UnreliableEvent:FireClient(player, b, refs)
+			end, constants.MAX_UNRELIABLE_SIZE)
+			players_unreliable[player] = found
+		end
+		return found
+	end
 
 	local function create_object(intermediate: libtypes.Intermediate<any, any>): any
+		local id = intermediate.id
 		if intermediate.__kind == "function" then
 			local r: libtypes.ServerFunction = table.freeze({
 				set_callback = function(self, callback)
-					return callbacks.set(intermediate.id, callback)
+					return callbacks.set(id, callback)
 				end,
 				__kind = "function" :: "function",
 				__T = nil :: never,
 			})
 			return r
 		elseif intermediate.__kind == "event" then
+			local write = intermediate.schema.write
+			local global = if intermediate.reliable then global_reliable else global_unreliable
+			local channel_for: (Player) -> libtypes.Channel? = if intermediate.reliable
+				then reliable_for
+				else unreliable_for
+
 			local r: libtypes.ServerRemote = table.freeze({
 				connect = function(self, callback)
-					return connections.add(intermediate.id, callback)
+					return connections.add(id, callback)
 				end,
 				fire_all = function(self, data)
-					if intermediate.reliable then
-						append_all_reliable(intermediate.id, intermediate.schema.write, data)
-					else
-						append_all_unreliable(intermediate.id, intermediate.schema.write, data)
-					end
+					append(global, id, write, data)
 				end,
 				fire = function(self, p, data)
-					if intermediate.reliable then
-						append_reliable(p, intermediate.id, intermediate.schema.write, data)
-					else
-						append_unreliable(p, intermediate.id, intermediate.schema.write, data)
+					local target = channel_for(p)
+					if target then
+						append(target, id, write, data)
 					end
 				end,
 				__kind = "event" :: "event",
@@ -115,73 +106,51 @@ function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateServer<
 		error("INVALID __KIND! EXPECTED function | event")
 	end
 
-	UnreliableEvent.OnServerEvent:Connect(function(player: Player, buf, ref)
+	local function size_error(len: number): string
+		return `BUFFER OF SIZE {len} EXCEEDS {max_size}B! SET THE SECOND PARAMETER OF THE INIT() FUNCTION TO A BIGGER VALUE!`
+	end
+
+	local function on_event(player: Player, buf, ref)
 		if not validate(buf, ref) then
 			return
 		end
-		assert(
-			max_buffer_size > buffer.len(buf),
-			`BUFFER OF SIZE {buffer.len(buf)} EXCEEDS {max_buffer_size}B! SET THE SECOND PARAMETER OF THE INIT() FUNCTION TO A BIGGER VALUE!`
-		)
-		ref_tracker.set(ref)
-		read_server(buf, player)
-	end)
-	ReliableEvent.OnServerEvent:Connect(function(player: Player, buf, ref)
-		if not validate(buf, ref) then
-			return
+		if buffer.len(buf) > max_size then
+			error(size_error(buffer.len(buf)))
 		end
-		assert(
-			max_buffer_size > buffer.len(buf),
-			`BUFFER OF SIZE {buffer.len(buf)} EXCEEDS {max_buffer_size}B! SET THE SECOND PARAMETER OF THE INIT() FUNCTION TO A BIGGER VALUE!`
-		)
 		ref_tracker.set(ref)
 		read_server(buf, player)
-	end)
+	end
+
+	UnreliableEvent.OnServerEvent:Connect(on_event)
+	ReliableEvent.OnServerEvent:Connect(on_event)
 
 	RemoteFunction.OnServerInvoke = function(plr, b, ref): any
 		if not validate(b, ref) then
+			return false, nil, nil
+		end
+		if buffer.len(b) > max_size then
+			-- raised on its own thread: an error in here would throw inside the client's invoke()
+			task.spawn(error :: any, size_error(buffer.len(b)))
 			return false, nil, nil
 		end
 		ref_tracker.set(ref)
 		return read_server_remote_function(plr, b)
 	end
 
-	RunService.Heartbeat:Connect(function()
-		if global_reliable.cursor > 0 then
-			local b, r = dump(global_reliable)
-			ReliableEvent:FireAllClients(b, r)
-
-			global_reliable.cursor = 0
-			table.clear(global_reliable.references)
+	Players.PlayerRemoving:Connect(function(player)
+		gone[player] = true
+		local reliable, unreliable = players_reliable[player], players_unreliable[player]
+		if reliable then
+			reliable.cursor = 0
+			players_reliable[player] = nil
 		end
-
-		if global_unreliable.cursor > 0 then
-			local b, r = dump(global_unreliable)
-			UnreliableEvent:FireAllClients(b, r)
-
-			global_unreliable.cursor = 0
-			table.clear(global_unreliable.references)
-		end
-
-		for _, player in Players:GetPlayers() do
-			local p_rel = players_reliable[player]
-			local p_unrel = players_unreliable[player]
-
-			if p_rel and p_rel.cursor > 0 then
-				local b, r = dump(p_rel)
-				ReliableEvent:FireClient(player, b, r)
-				p_rel.cursor = 0
-				table.clear(p_rel.references)
-			end
-
-			if p_unrel and p_unrel.cursor > 0 then
-				local b, r = dump(p_unrel)
-				UnreliableEvent:FireClient(player, b, r)
-				p_unrel.cursor = 0
-				table.clear(p_unrel.references)
-			end
+		if unreliable then
+			unreliable.cursor = 0
+			players_unreliable[player] = nil
 		end
 	end)
+
+	RunService.Heartbeat:Connect(channel.flush_all)
 
 	ReliableEvent.Parent = constants.EVENT_FOLDER
 	UnreliableEvent.Parent = constants.EVENT_FOLDER

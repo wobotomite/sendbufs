@@ -3,7 +3,7 @@ local id_tracker = require(script.Parent.Parent.trackers["id-tracker"])
 local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local libtypes = require(script.Parent.Parent.util.libtypes)
 
-function event<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
+local function event<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
 	local t = table.freeze({
 		__kind = "event" :: "event",
 		__schema = nil :: T,
@@ -17,7 +17,7 @@ function event<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "ev
 	return t
 end
 
-function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
+local function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
 	local t = table.freeze({
 		__kind = "event" :: "event",
 		__schema = nil :: T,
@@ -31,7 +31,7 @@ function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil
 	return t
 end
 
-function fn<T, K>(input: libtypes.Schema<T>?, output: libtypes.Schema<K>?): libtypes.Intermediate<T, K, "function">
+local function fn<T, K>(input: libtypes.Schema<T>?, output: libtypes.Schema<K>?): libtypes.Intermediate<T, K, "function">
 	local t = table.freeze({
 		__kind = "function" :: "function",
 		__schema = nil :: T,

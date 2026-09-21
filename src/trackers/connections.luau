@@ -2,23 +2,31 @@ local libtypes = require(script.Parent.Parent.util.libtypes)
 
 local connection_map: { [number]: { libtypes.Connection } } = {}
 
-function add(id: number, cb: libtypes.Connection)
-	local entry = connection_map[id] or {}
+-- lists are swapped, never edited, so a dispatch that is mid-loop keeps the one it started with
+local function add(id: number, cb: libtypes.Connection)
+	local entry = table.clone(connection_map[id] or {})
+	assert(not table.find(entry, cb), "FUNCTION ALREADY CONNECTED TO THIS EVENT")
 	table.insert(entry, cb)
+	connection_map[id] = entry
+
+	local connected = true
 	local function remove()
-		local arr = connection_map[id]
-		local index = table.find(arr, cb)
+		if not connected then
+			return
+		end
+		connected = false
+		local index = table.find(connection_map[id], cb)
 		if index then
-			table.remove(connection_map[id], index)
+			local copy = table.clone(connection_map[id])
+			table.remove(copy, index)
+			connection_map[id] = copy
 		end
 	end
-
-	connection_map[id] = entry
 
 	return remove
 end
 
-function get(id: number): { libtypes.Connection }?
+local function get(id: number): { libtypes.Connection }?
 	return connection_map[id]
 end
 

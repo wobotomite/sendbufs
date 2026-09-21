@@ -1,10 +1,12 @@
 local globalid = 0
 
-function take()
+local function take()
 	globalid += 1
+	-- ids travel as a u8
+	assert(globalid <= 255, "REMOTE LIMIT OF 255 REACHED")
 	return globalid
 end
-function get()
+local function get()
 	return globalid
 end
 

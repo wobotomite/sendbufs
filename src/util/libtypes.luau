@@ -7,6 +7,11 @@ export type Buffer = {
 	inner: buffer,
 }
 
+export type Channel = Buffer & {
+	send: (buffer, { unknown }?) -> (),
+	limit: number,
+}
+
 export type function GetSchema(t: type, schemaindex: string)
 	return t:readproperty(types.singleton(schemaindex))
 end

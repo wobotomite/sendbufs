@@ -4,21 +4,21 @@ local constants = require(script.Parent.Parent.constants)
 local is_debug = RunService:IsStudio() or (workspace:GetAttribute(constants.IS_DEBUG_ATTRIBUTE) == true)
 local template = "[sendbufs]:"
 
-function white(...: string)
+local function white(...: string)
 	if not is_debug then
 		return
 	end
 	print(template, ...)
 end
 
-function orange(...: string)
+local function orange(...: string)
 	if not is_debug then
 		return
 	end
 	warn(template, ...)
 end
 
-function errorif(cond: boolean, str: string)
+local function errorif(cond: boolean, str: string)
 	if cond then
 		error(str)
 	end

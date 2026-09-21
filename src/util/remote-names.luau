@@ -1,0 +1,22 @@
+-- names hashed from the JobId: both sides get the same ones without a handshake, and no two servers share them
+
+local function fnv1a(text: string, hash: number): number
+	for i = 1, #text do
+		hash = bit32.bxor(hash, string.byte(text, i))
+		-- hash * 16777619, split so it stays inside a double
+		hash = (bit32.lshift(hash, 24) + hash * 403) % 4294967296
+	end
+	return hash
+end
+
+local function guid(text: string): string
+	local a = fnv1a(text, 2166136261)
+	local b = fnv1a(text, a)
+	local c = fnv1a(text, b)
+	local d = fnv1a(text, c)
+	return string.format("%08x-%04x-%04x-%04x-%04x%08x", a, b // 65536, b % 65536, c // 65536, c % 65536, d)
+end
+
+return function(job_id: string): (string, string, string)
+	return guid("reliable" .. job_id), guid("unreliable" .. job_id), guid("function" .. job_id)
+end

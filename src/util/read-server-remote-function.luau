@@ -1,57 +1,55 @@
+--!native
+--!optimize 2
 local middleware = require(script.Parent.Parent.features.middleware)
-local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local callbacks = require(script.Parent.callbacks)
 local dump = require(script.Parent.dump)
-local libtypes = require(script.Parent.libtypes)
 local logger = require(script.Parent.logger)
 local writer = require(script.Parent.writer)
 local small_buffer = require(script.Parent["small-buffer"])
 
-return @native function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
-	local sb: libtypes.Buffer = {
-		inner = b,
-		references = ref_tracker.get() or {},
-		size = buffer.len(b),
-		cursor = 0,
-	}
-	while sb.cursor < sb.size do
-		local id = buffer.readu8(b, sb.cursor)
-		local remo = remote_tracker.get()[id]
+local remotes = remote_tracker.get()
 
-		if remo.__kind ~= "function" then
-			logger.orange(`INVALID FUNCTION ID! #{id}`)
-			return false, nil, nil
-		end
+return function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
+	local id = buffer.readu8(b, 0)
+	local remo = remotes[id]
 
-		sb.cursor += 1
-		local value, nc = remo.schema.read(sb.inner, sb.cursor)
-		sb.cursor += nc
-
-		local callback = callbacks.get(id)
-
-		if not callback then
-			logger.orange(`UNHANDLED REMOTE FUNCTION! #{id}`)
-			return false, nil, nil
-		end
-
-		if not middleware.run_middleware(id, plr) then
-			return false, nil, nil
-		end
-		local success1, success2, res = pcall(callback, plr, value)
-
-		local success = success2 and success1
-
-		if not success then
-			logger.orange(`CALLBACK FAILED: {res}`)
-			return false, nil, nil
-		end
-
-		local buf = small_buffer()
-		writer.load(buf)
-		remo.schema_output.write(res)
-		local r, refs = dump(writer.export())
-		return true, r, refs
+	if not remo or remo.__kind ~= "function" then
+		logger.orange(`INVALID FUNCTION ID! #{id}`)
+		return false, nil, nil
 	end
-	return false, nil, nil
+
+	local read, value = pcall(remo.schema.read, b, 1)
+	if not read then
+		logger.orange(`MALFORMED PAYLOAD FOR FUNCTION #{id}: {value}`)
+		return false, nil, nil
+	end
+
+	local callback = callbacks.get(id)
+
+	if not callback then
+		logger.orange(`UNHANDLED REMOTE FUNCTION! #{id}`)
+		return false, nil, nil
+	end
+
+	if not middleware.run_middleware(id, plr) then
+		return false, nil, nil
+	end
+
+	local ran, success, res = pcall(callback, plr, value)
+	if not ran then
+		logger.orange(`CALLBACK FAILED: {success}`)
+		return false, nil, nil
+	end
+	if not success then
+		return false, nil, nil
+	end
+
+	writer.load(small_buffer())
+	local wrote, why = pcall(remo.schema_output.write :: any, res)
+	if not wrote then
+		logger.orange(`FUNCTION #{id} RETURNED A VALUE ITS SCHEMA CANNOT WRITE: {why}`)
+		return false, nil, nil
+	end
+	return true, dump(writer.export())
 end
