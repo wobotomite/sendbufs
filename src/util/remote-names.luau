@@ -17,6 +17,12 @@ local function guid(text: string): string
 	return string.format("%08x-%04x-%04x-%04x-%04x%08x", a, b // 65536, b % 65536, c // 65536, c % 65536, d)
 end
 
+-- studio has no job, and its two sides spell that differently: the server reads "", the client this
+local NO_JOB = "00000000-0000-0000-0000-000000000000"
+
 return function(job_id: string): (string, string, string)
+	if job_id == NO_JOB then
+		job_id = ""
+	end
 	return guid("reliable" .. job_id), guid("unreliable" .. job_id), guid("function" .. job_id)
 end

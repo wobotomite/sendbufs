@@ -24,7 +24,7 @@ local function init<T>(t: T & {}): libtypes.ReplicateClient<T>
 	assert(not __init, "NETWORKING ALREADY STARTED")
 	__init = true
 
-	-- the names hang off the JobId, which is only ever empty in studio
+	-- the names hang off the JobId, which only studio never sets
 	while game.JobId == "" and not RunService:IsStudio() do
 		task.wait()
 	end
