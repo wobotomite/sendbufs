@@ -23,6 +23,10 @@ local function read_varint(b: buffer, o: number): (number, number)
 	end
 	local value, scale, n = byte - 128, 128, 1
 	repeat
+		-- the writer never emits more than 8 bytes; past that the value runs to inf and NaN
+		if n == 8 then
+			error("VARINT TOO LONG")
+		end
 		byte = buffer.readu8(b, o + n)
 		value += byte % 128 * scale
 		scale *= 128
