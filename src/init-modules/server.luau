@@ -9,6 +9,7 @@ local callbacks = require(script.Parent.Parent.util.callbacks)
 
 local channel = require(script.Parent.Parent.util.channel)
 local libtypes = require(script.Parent.Parent.util.libtypes)
+local logger = require(script.Parent.Parent.util.logger)
 local iter_and_convert = require(script.Parent.Parent.util["iter-and-convert"])
 local read_server = require(script.Parent.Parent.util["read-server"])
 local read_server_remote_function = require(script.Parent.Parent.util["read-server-remote-function"])
@@ -115,7 +116,9 @@ local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateS
 			return
 		end
 		if buffer.len(buf) > max_size then
-			error(size_error(buffer.len(buf)))
+			-- logged, not raised: any client can send an oversized buffer, as often as it likes
+			logger.orange(size_error(buffer.len(buf)))
+			return
 		end
 		ref_tracker.set(ref)
 		read_server(buf, player)
@@ -129,8 +132,7 @@ local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateS
 			return false, nil, nil
 		end
 		if buffer.len(b) > max_size then
-			-- raised on its own thread: an error in here would throw inside the client's invoke()
-			task.spawn(error :: any, size_error(buffer.len(b)))
+			logger.orange(size_error(buffer.len(b)))
 			return false, nil, nil
 		end
 		ref_tracker.set(ref)
