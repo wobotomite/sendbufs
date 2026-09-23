@@ -1,7 +1,7 @@
-local current: { unknown }
+local current: { unknown }?
 
 return table.freeze({
-	set = function(refs)
+	set = function(refs: { unknown }?)
 		current = refs
 	end,
 	get = function()

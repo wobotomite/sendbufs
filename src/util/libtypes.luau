@@ -2,7 +2,6 @@
 
 export type Buffer = {
 	cursor: number,
-	size: number,
 	references: { unknown },
 	inner: buffer,
 }
@@ -10,34 +9,28 @@ export type Buffer = {
 export type Channel = Buffer & {
 	send: (buffer, { unknown }?) -> (),
 	limit: number,
+	-- an unreliable channel drops a message over limit instead of sending it
+	reliable: boolean,
+	-- messages in the batch
+	count: number,
 }
 
 export type function GetSchema(t: type, schemaindex: string)
 	return t:readproperty(types.singleton(schemaindex))
 end
 
+-- a field's type is its schema's __T as is: nested structs already resolved theirs
 export type function GetNestedSchema(t: type)
 	local nt = types.newtable()
-	local function traverse(t: type, n: type)
-		for i, v in t:properties() do
-			local tx = GetSchema(v.read or types.never, "__T")
-			if tx:is("table") then
-				local ntx = types.newtable()
-				n:setproperty(types.singleton(i:value()), ntx)
-				traverse(tx, ntx)
-			else
-				n:setproperty(types.singleton(i:value()), tx)
-			end
-		end
+	for i, v in t:properties() do
+		nt:setproperty(types.singleton(i:value()), GetSchema(v.read or types.never, "__T"))
 	end
-	traverse(t, nt)
-
 	return nt
 end
 
 export type Middleware = (id: number, plr: Player) -> boolean
 export type Connection = (...any) -> ()
-export type Callback = (...any) -> (boolean, any)
+export type Callback = (...any) -> (boolean, ...any)
 export type Cleanup = () -> ()
 
 export type Schema<T = nil> = {
@@ -48,12 +41,14 @@ export type Schema<T = nil> = {
 
 export type Intermediate<T = nil, O = nil, K = never> = {
 	read schema: Schema<T>,
-	read schema_output: Schema<O>,
+	-- functions only
+	read schema_output: Schema<O>?,
 	read __schema_output: O,
 	read __schema: T,
 	read __kind: K,
 	read id: number,
-	read reliable: boolean,
+	-- events only
+	read reliable: boolean?,
 }
 
 export type ClientRemote<T = nil> = {
@@ -63,7 +58,7 @@ export type ClientRemote<T = nil> = {
 	read __kind: "event",
 }
 export type ClientFunction<T = nil, O = nil> = {
-	read invoke: (any, T) -> (boolean, O),
+	read invoke: (any, T) -> (boolean, O?),
 	read __T: T,
 	read __O: O,
 	read __kind: "function",
@@ -76,13 +71,14 @@ export type ServerRemote<T = nil> = {
 	read __kind: "event",
 }
 export type ServerFunction<T = nil, O = nil> = {
-	read set_callback: (any, (Player, T) -> (boolean, O)) -> (),
+	-- O? so a refusal can return false, nil as well as false
+	read set_callback: (any, (Player, T) -> (boolean, ...O?)) -> (),
 	read __T: T,
 	read __O: O,
 	read __kind: "function",
 }
 
-type function ClientSearchAndReplace(input: type, relative_write_to: type): ()
+type function SearchAndReplace(input: type, relative_write_to: type, server: boolean): ()
 	assert(input:is("table"), "NOT A TABLE")
 
 	for i, v in input:properties() do
@@ -97,9 +93,10 @@ type function ClientSearchAndReplace(input: type, relative_write_to: type): ()
 				assert(remote_kind, "FAILED TO GET KIND")
 				remote_kind = remote_kind:value()
 				if remote_kind == "function" then
-					substituted = ClientFunction(schema, schema_output or types.singleton(nil))
+					local output = schema_output or types.singleton(nil)
+					substituted = if server then ServerFunction(schema, output) else ClientFunction(schema, output)
 				elseif remote_kind == "event" then
-					substituted = ClientRemote(schema)
+					substituted = if server then ServerRemote(schema) else ClientRemote(schema)
 				end
 			end
 			assert(substituted, "NO SUBSTITUTE")
@@ -107,50 +104,20 @@ type function ClientSearchAndReplace(input: type, relative_write_to: type): ()
 		else
 			local tempnt = types.newtable()
 			relative_write_to:setreadproperty(i, tempnt)
-			ClientSearchAndReplace(t, tempnt)
-		end
-	end
-end
-
-type function ServerSearchAndReplace(input: type, relative_write_to: type): ()
-	assert(input:is("table"), "NOT A TABLE")
-
-	for i, v in input:properties() do
-		local t = assert(v.read)
-
-		local schema = GetSchema(t, "__schema")
-		local schema_output = GetSchema(t, "__schema_output")
-		if schema then -- is Intermediate
-			local substituted: type
-			do
-				local remote_kind = t:readproperty(types.singleton("__kind"))
-				assert(remote_kind, "FAILED TO GET KIND")
-				remote_kind = remote_kind:value()
-				if remote_kind == "function" then
-					substituted = ServerFunction(schema, schema_output or types.singleton(nil))
-				elseif remote_kind == "event" then
-					substituted = ServerRemote(schema)
-				end
-			end
-			assert(substituted, "NO SUBSTITUTE")
-			relative_write_to:setreadproperty(i, substituted)
-		else
-			local tempnt = types.newtable()
-			relative_write_to:setreadproperty(i, tempnt)
-			ServerSearchAndReplace(t, tempnt)
+			SearchAndReplace(t, tempnt, server)
 		end
 	end
 end
 
 export type function ReplicateClient(original: type)
 	local ot = types.newtable()
-	ClientSearchAndReplace(original, ot)
+	SearchAndReplace(original, ot, false)
 	return ot
 end
 
 export type function ReplicateServer(original: type)
 	local ot = types.newtable()
-	ServerSearchAndReplace(original, ot)
+	SearchAndReplace(original, ot, true)
 	return ot
 end
 

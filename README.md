@@ -33,7 +33,7 @@ const network_definitions = require(...);
 return sendbufs.create_client(network_definitions)
 -- SERVER:
 const network_definitions = require(...);
-return sendbufs.create_server(network_definitions, 4096) -- 4096 is a required param. it is the max payload size a client can send to the server. you can make it as big or as small as you want.
+return sendbufs.create_server(network_definitions, 4096) -- optional, 4096 by default. the max size of one packet a client can send to the server. clients split their batches to fit, so only a single message bigger than this gets dropped.
 ```
 4. require & use:
 ```lua
@@ -48,7 +48,7 @@ if "no longer needed" then
 dc() -- disconnect
 end
 
-network.core.test_fn:set_callback(function(plr) -- set_callback will error if called more than once for a remote function.
+network.core.test_fn:set_callback(function(plr) -- one callback per remote function: calling set_callback again logs an error and keeps the first one.
 return true, nil -- 1st value is the success, second is the result. return false to tell the client the function failed.
 end)
 ```

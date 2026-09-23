@@ -12,8 +12,8 @@ local shared = require(script["init-modules"].shared)
 export type ClientEvent<T> = libtypes.ClientRemote<T>
 export type ServerEvent<T> = libtypes.ServerRemote<T>
 
-export type ClientFunction<T> = libtypes.ClientFunction<T>
-export type ServerFunction<T> = libtypes.ServerFunction<T>
+export type ClientFunction<T = nil, O = nil> = libtypes.ClientFunction<T, O>
+export type ServerFunction<T = nil, O = nil> = libtypes.ServerFunction<T, O>
 
 export type Middleware = libtypes.Middleware
 export type Callback = libtypes.Callback
@@ -34,26 +34,22 @@ return table.freeze({
       <Properties>
         <string name="Name">constants</string>
         <string name="Source"><![CDATA[return table.freeze({
-	EVENT_TYPE = table.freeze({
-		RELIABLE = 0,
-		UNRELIABLE = 1,
-	}),
 	EVENT_FOLDER = game:GetService("ReplicatedStorage"),
 
 	IS_DEBUG_ATTRIBUTE = "IS_DEBUG",
-
-	VOID = "\135\135\174\174",
-
-	-- INSTANCE_ID_ATTRIBUTE = "__SB_INSTANCE_ID",
-
-	-- SERDES_WHITELIST = table.freeze({
-	-- 	"Workspace",
-	-- 	"ReplicatedStorage",
-	-- }),
+	-- set by the server on its reliable remote, checked by the client
+	MAX_SIZE_ATTRIBUTE = "MAX_SIZE",
+	SIGNATURE_ATTRIBUTE = "SIGNATURE",
 
 	MAX_SERVER_BUFFER_SIZE = 4096,
-	-- UnreliableRemoteEvent drops payloads over 1000B, the rest is margin for the refs riding along
+	-- UnreliableRemoteEvent drops calls over 1000B, refs included, the rest is margin
 	MAX_UNRELIABLE_SIZE = 900,
+	-- what one ref is counted as against a batch's limit
+	REF_BYTES = 8,
+	-- ref indices are one byte
+	MAX_REFS = 255,
+	-- per inbound packet, so one packet can't spawn thousands of listener threads
+	MAX_MESSAGES = 256,
 
 	MIN_BUFFER_SIZE = 16,
 	LARGE_BUFFER_SIZE = 256,
@@ -73,13 +69,10 @@ local logger = require(script.Parent.Parent.util.logger)
 
 local middleware_map: { [number]: { libtypes.Middleware } } = {}
 
-local function middleware(t: libtypes.Intermediate<any, any, any>, mw: libtypes.Middleware)
+local function middleware(t: { read id: number }, mw: libtypes.Middleware)
 	local entry = middleware_map[t.id] or {}
 	table.insert(entry, mw)
 	middleware_map[t.id] = entry
-end
-local function get(id: number): { libtypes.Middleware }?
-	return middleware_map[id]
 end
 
 local function run_middleware(id: number, plr: Player)
@@ -89,7 +82,7 @@ local function run_middleware(id: number, plr: Player)
 			-- a middleware that throws refuses
 			local ran, allowed = pcall(v, id, plr)
 			if not ran then
-				logger.orange(`MIDDLEWARE FAILED FOR #{id}: {allowed}`)
+				logger.red(`MIDDLEWARE FAILED FOR #{id}: {allowed}`)
 				return false
 			end
 			if not allowed then
@@ -103,7 +96,6 @@ end
 return table.freeze({
 	run_middleware = run_middleware,
 	middleware = middleware,
-	get = get,
 })
 ]]></string>
         </Properties>
@@ -113,16 +105,14 @@ return table.freeze({
           <string name="Name">schema</string>
           <string name="Source"><![CDATA[--!native
 --!optimize 2
-local constants = require(script.Parent.Parent.constants)
 local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local libtypes = require(script.Parent.Parent.util.libtypes)
 local writer = require(script.Parent.Parent.util.writer)
 
 local b_u8 = writer.u8
+local b_f32 = writer.f32
 local b_varint = writer.varint
 local writestring = writer.writestring
-
-local VOID = constants.VOID
 
 local freeze = table.freeze :: <T>(T) -> T
 
@@ -136,6 +126,10 @@ local function read_varint(b: buffer, o: number): (number, number)
 	end
 	local value, scale, n = byte - 128, 128, 1
 	repeat
+		-- the writer never emits more than 8 bytes; past that the value runs to inf and NaN
+		if n == 8 then
+			error("VARINT TOO LONG")
+		end
 		byte = buffer.readu8(b, o + n)
 		value += byte % 128 * scale
 		scale *= 128
@@ -154,6 +148,15 @@ local function read_len(b: buffer, o: number): (number, number)
 		end
 	end
 	return len, n
+end
+
+-- # picks any border of a table with a hole, so the array would be cut short without a word
+local function array_len(v: { any }): number
+	local len = #v
+	if table.maxn(v) ~= len then
+		error(`ARRAY HAS A HOLE: # IS {len} BUT THE LAST INDEX IS {table.maxn(v)}`)
+	end
+	return len
 end
 
 local bool: libtypes.Schema<boolean> = {
@@ -208,7 +211,7 @@ local i32: libtypes.Schema<number> = {
 	__T = nil :: never,
 }
 
--- whole numbers up to 2^53, a byte per 7 bits
+-- whole numbers under 2^53, a byte per 7 bits
 local uvar: libtypes.Schema<number> = {
 	read = read_varint,
 	write = b_varint,
@@ -223,6 +226,10 @@ local ivar: libtypes.Schema<number> = {
 		return -(z + 1) / 2, n
 	end,
 	write = function(v)
+		-- zigzag only maps integers, and doubles them into varint's 2^53 range
+		if v // 1 ~= v or v < -2 ^ 52 or v >= 2 ^ 52 then
+			error(`IVAR TAKES AN INTEGER FROM -2^52 TO 2^52 - 1, GOT {v}`)
+		end
 		-- zigzag, so a small negative is as short as a small positive
 		b_varint(if v < 0 then -2 * v - 1 else 2 * v)
 	end,
@@ -273,8 +280,9 @@ end
 local bool_array: libtypes.Schema<{ boolean }> = {
 	read = function(b, cursor)
 		local len, n = read_len(b, cursor)
-		local out = table.create(len) :: { boolean }
 		local c = cursor + n
+		-- no bigger than the rest of the packet can hold, whatever the length claims
+		local out = table.create(math.min(len, (buffer.len(b) - c) * 8)) :: { boolean }
 		local byte = 0
 		for i = 1, len do
 			if i % 8 == 1 then
@@ -287,7 +295,7 @@ local bool_array: libtypes.Schema<{ boolean }> = {
 		return out, c - cursor
 	end,
 	write = function(v)
-		local len = #v
+		local len = array_len(v)
 		b_varint(len)
 		local byte, weight = 0, 1
 		for i = 1, len do
@@ -320,13 +328,17 @@ local function array<T>(input: libtypes.Schema<T>): libtypes.Schema<{ T }>
 			local out: { T } = table.create(math.min(len, buffer.len(b) - arr_cursor))
 			for i = 1, len do
 				local v, size = read(b, arr_cursor)
+				-- read_len only bounds the length by the packet if every element takes space
+				if size == 0 then
+					error("ARRAY ELEMENTS MUST TAKE AT LEAST A BYTE")
+				end
 				out[i] = v
 				arr_cursor += size
 			end
 			return out, arr_cursor - cursor
 		end,
 		write = function(v)
-			local s = #v
+			local s = array_len(v)
 			b_varint(s)
 			for i = 1, s do
 				write(v[i])
@@ -350,7 +362,13 @@ local function map<K, V>(k: libtypes.Schema<K>, v: libtypes.Schema<V>): libtypes
 				map_cursor += klen
 				local value, vlen = vread(b, map_cursor)
 				map_cursor += vlen
-				out[key] = value
+				if klen + vlen == 0 then
+					error("MAP ENTRIES MUST TAKE AT LEAST A BYTE")
+				end
+				-- a key that can't index a table (a ref that has not streamed in, NaN) loses its entry
+				if key ~= nil and key == key then
+					out[key] = value
+				end
 			end
 			return out, map_cursor - cursor
 		end,
@@ -380,7 +398,12 @@ local function set<K>(k: libtypes.Schema<K>): libtypes.Schema<{ [K]: boolean }>
 			for i = 1, len do
 				local key, klen = kread(b, set_cursor)
 				set_cursor += klen
-				out[key] = true
+				if klen == 0 then
+					error("SET KEYS MUST TAKE AT LEAST A BYTE")
+				end
+				if key ~= nil and key == key then
+					out[key] = true
+				end
 			end
 			return out, set_cursor - cursor
 		end,
@@ -520,29 +543,25 @@ local function cframe<T>(input: libtypes.Schema<T & number>): libtypes.Schema<CF
 	return {
 		read = function(buff, init)
 			local c = init
-			local x, y, z, rx, ry, rz, n
+			local x, y, z, n
 			x, n = read(buff, c)
 			c += n
 			y, n = read(buff, c)
 			c += n
 			z, n = read(buff, c)
 			c += n
-			rx, n = read(buff, c)
-			c += n
-			ry, n = read(buff, c)
-			c += n
-			rz, n = read(buff, c)
-			c += n
-			return CFrame.Angles(rx, ry, rz) + Vector3.new(x, y, z), c - init
+			local rx, ry, rz = buffer.readf32(buff, c), buffer.readf32(buff, c + 4), buffer.readf32(buff, c + 8)
+			return CFrame.Angles(rx, ry, rz) + Vector3.new(x, y, z), c + 12 - init
 		end,
 		write = function(v: CFrame)
 			local rx, ry, rz = v:ToEulerAnglesXYZ()
 			write(v.X)
 			write(v.Y)
 			write(v.Z)
-			write(rx)
-			write(ry)
-			write(rz)
+			-- angles are always f32, T only packs the position: an integer T would round them to whole radians
+			b_f32(rx)
+			b_f32(ry)
+			b_f32(rz)
 		end,
 		__T = nil :: never,
 	}
@@ -577,11 +596,8 @@ local ref: libtypes.Schema<any?> = {
 		if not ref_list then
 			return nil, 1
 		end
-		local obtained_ref = ref_list[buffer.readu8(b, cursor)]
-		if obtained_ref == VOID then
-			obtained_ref = nil
-		end
-		return obtained_ref, 1
+		-- index 0 is nil, the writer never puts it in the list
+		return ref_list[buffer.readu8(b, cursor)], 1
 	end,
 	write = writer.reference,
 	__T = nil :: never,
@@ -644,47 +660,33 @@ local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local channel = require(script.Parent.Parent.util.channel)
 local dump = require(script.Parent.Parent.util.dump)
 local libtypes = require(script.Parent.Parent.util.libtypes)
+local logger = require(script.Parent.Parent.util.logger)
 local writer = require(script.Parent.Parent.util.writer)
 local iter_and_convert = require(script.Parent.Parent.util["iter-and-convert"])
-local read_client = require(script.Parent.Parent.util["read-client"])
+local read = require(script.Parent.Parent.util.read)
 local remote_names = require(script.Parent.Parent.util["remote-names"])
 local small_buffer = require(script.Parent.Parent.util["small-buffer"])
 
-local load = writer.load
-local u8 = writer.u8
-local export = writer.export
 local append = channel.append
 
 local __init = false
 
 local function init<T>(t: T & {}): libtypes.ReplicateClient<T>
 	assert(not __init, "NETWORKING ALREADY STARTED")
-	__init = true
 
-	-- the names hang off the JobId, which only studio never sets
-	while game.JobId == "" and not RunService:IsStudio() do
-		task.wait()
-	end
-	local reliable_name, unreliable_name, function_name = remote_names(game.JobId)
-
-	local ReliableEvent = constants.EVENT_FOLDER:WaitForChild(reliable_name, math.huge) :: RemoteEvent
-	local UnreliableEvent = constants.EVENT_FOLDER:WaitForChild(unreliable_name, math.huge) :: UnreliableRemoteEvent
-	local RemoteFunction = constants.EVENT_FOLDER:WaitForChild(function_name, math.huge) :: RemoteFunction
-
-	local function on_event(buf, ref)
-		ref_tracker.set(ref)
-		read_client(buf)
-	end
-
-	ReliableEvent.OnClientEvent:Connect(on_event)
-	UnreliableEvent.OnClientEvent:Connect(on_event)
+	-- found below; nothing can fire before init returns, so the channels only reach them after that
+	local ReliableEvent: RemoteEvent
+	local UnreliableEvent: UnreliableRemoteEvent
+	local RemoteFunction: RemoteFunction
+	-- what the server accepts from one call, read from its remote
+	local max_size = constants.MAX_SERVER_BUFFER_SIZE
 
 	local payload_reliable = channel.new(function(b, refs)
 		ReliableEvent:FireServer(b, refs)
-	end, math.huge)
+	end, max_size, true)
 	local payload_unreliable = channel.new(function(b, refs)
 		UnreliableEvent:FireServer(b, refs)
-	end, constants.MAX_UNRELIABLE_SIZE)
+	end, constants.MAX_UNRELIABLE_SIZE, false)
 
 	local function invoke_fn(
 		id: number,
@@ -692,22 +694,32 @@ local function init<T>(t: T & {}): libtypes.ReplicateClient<T>
 		reader: (buffer: buffer, cursor: number) -> (any, number),
 		data: any
 	): (boolean, any)
-		load(small_buffer())
-		u8(id)
-		write(data)
-		local success, nbuf, refs = RemoteFunction:InvokeServer(dump(export()))
-		if success then
-			ref_tracker.set(refs)
-			return true, reader(nbuf, 0)
+		local b = small_buffer()
+		writer.message(b, id, write, data)
+		local refs = #b.references
+		if refs > constants.MAX_REFS then
+			-- ref indices are one byte, past MAX_REFS they would point at the wrong refs
+			error(`REMOTE #{id} WROTE {refs} REFS, ONE MESSAGE CAN CARRY {constants.MAX_REFS}`)
 		end
-		return false
+		if b.cursor > max_size then
+			logger.red(`REMOTE #{id} WROTE A {b.cursor}B INVOKE, OVER THE SERVER'S {max_size}B LIMIT`)
+			return false, nil
+		end
+		-- events fired before the call reach the server before it
+		channel.flush(payload_reliable)
+		local success, nbuf, nrefs = RemoteFunction:InvokeServer(dump(b))
+		if success then
+			ref_tracker.set(nrefs)
+			return true, (reader(nbuf, 0))
+		end
+		return false, nil
 	end
 
 	local function create_object(intermediate: libtypes.Intermediate<any, any>): any
 		local id = intermediate.id
 		local write = intermediate.schema.write
 		if intermediate.__kind == "function" then
-			local read_output = intermediate.schema_output.read
+			local read_output = (intermediate.schema_output :: libtypes.Schema<any>).read
 			local r: libtypes.ClientFunction = table.freeze({
 				invoke = function(self, data)
 					return invoke_fn(id, write, read_output, data)
@@ -733,9 +745,41 @@ local function init<T>(t: T & {}): libtypes.ReplicateClient<T>
 		error("INVALID __KIND! EXPECTED function | event")
 	end
 
+	-- before anything waits, so bad definitions throw at once and leave nothing behind
+	local converted, signature = iter_and_convert(t, create_object)
+	__init = true
+
+	-- the names hang off the JobId, which can be read before it replicates, so they are worked out again each frame
+	local reliable_name, unreliable_name, function_name = remote_names.names(game.JobId)
+	local waited = 0
+	while not constants.EVENT_FOLDER:FindFirstChild(reliable_name) do
+		local was = waited
+		waited += task.wait()
+		if was < 5 and waited >= 5 then
+			logger.red(`NO REMOTES FOR JOBID "{game.JobId}" AFTER 5S, IS create_server RUNNING ON THE SERVER?`)
+		end
+		reliable_name, unreliable_name, function_name = remote_names.names(game.JobId)
+	end
+
+	ReliableEvent = constants.EVENT_FOLDER:WaitForChild(reliable_name) :: RemoteEvent
+	UnreliableEvent = constants.EVENT_FOLDER:WaitForChild(unreliable_name) :: UnreliableRemoteEvent
+	RemoteFunction = constants.EVENT_FOLDER:WaitForChild(function_name) :: RemoteFunction
+
+	max_size = (ReliableEvent:GetAttribute(constants.MAX_SIZE_ATTRIBUTE) :: number?) or max_size
+	payload_reliable.limit = max_size
+	payload_unreliable.limit = math.min(constants.MAX_UNRELIABLE_SIZE, max_size)
+	if ReliableEvent:GetAttribute(constants.SIGNATURE_ATTRIBUTE) ~= signature then
+		logger.red(
+			"THE SERVER AND THE CLIENT BUILT DIFFERENT REMOTES, SO MESSAGES CAN REACH THE WRONG ONE! CREATE THE SAME REMOTES IN THE SAME ORDER ON BOTH SIDES"
+		)
+	end
+
+	ReliableEvent.OnClientEvent:Connect(read)
+	UnreliableEvent.OnClientEvent:Connect(read)
+
 	RunService.Heartbeat:Connect(channel.flush_all)
 
-	return iter_and_convert(t, create_object) :: never
+	return converted :: never
 end
 
 return init
@@ -751,27 +795,27 @@ local RunService = game:GetService("RunService")
 local constants = require(script.Parent.Parent.constants)
 local validate = require(script.Parent.Parent.features.validate)
 local connections = require(script.Parent.Parent.trackers.connections)
-local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local callbacks = require(script.Parent.Parent.util.callbacks)
 
 local channel = require(script.Parent.Parent.util.channel)
 local libtypes = require(script.Parent.Parent.util.libtypes)
+local logger = require(script.Parent.Parent.util.logger)
 local iter_and_convert = require(script.Parent.Parent.util["iter-and-convert"])
-local read_server = require(script.Parent.Parent.util["read-server"])
+local read = require(script.Parent.Parent.util.read)
 local read_server_remote_function = require(script.Parent.Parent.util["read-server-remote-function"])
 local remote_names = require(script.Parent.Parent.util["remote-names"])
 
 local append = channel.append
+local flush = channel.flush
 
 local __init = false
 
 local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateServer<T>
 	assert(not __init, "NETWORKING ALREADY STARTED")
-	__init = true
 
 	local max_size: number = max_buffer_size or constants.MAX_SERVER_BUFFER_SIZE
 
-	local reliable_name, unreliable_name, function_name = remote_names(game.JobId)
+	local reliable_name, unreliable_name, function_name = remote_names.names(game.JobId)
 
 	local ReliableEvent = Instance.new("RemoteEvent")
 	ReliableEvent.Name = reliable_name
@@ -782,36 +826,53 @@ local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateS
 
 	local global_reliable = channel.new(function(b, refs)
 		ReliableEvent:FireAllClients(b, refs)
-	end, math.huge)
+	end, math.huge, true)
 	local global_unreliable = channel.new(function(b, refs)
 		UnreliableEvent:FireAllClients(b, refs)
-	end, constants.MAX_UNRELIABLE_SIZE)
+	end, constants.MAX_UNRELIABLE_SIZE, false)
 
-	local players_reliable: { [Player]: libtypes.Channel } = {}
-	local players_unreliable: { [Player]: libtypes.Channel } = {}
 	-- players that left, so a late fire() does not open a channel nobody closes
 	local gone: { [Player]: boolean } = setmetatable({}, { __mode = "k" }) :: any
 
-	local function reliable_for(player: Player): libtypes.Channel?
-		local found = players_reliable[player]
-		if not found and not gone[player] then
-			found = channel.new(function(b, refs)
-				ReliableEvent:FireClient(player, b, refs)
-			end, math.huge)
-			players_reliable[player] = found
+	local function per_player(fire: (Player, buffer, { unknown }?) -> (), limit: number, reliable: boolean)
+		local lanes: { [Player]: libtypes.Channel } = {}
+		local function lane_for(player: Player): libtypes.Channel?
+			local found = lanes[player]
+			-- a Player that left has no parent, which still holds once gone has let go of it
+			if not found and player.Parent == Players and not gone[player] then
+				found = channel.new(function(b, refs)
+					fire(player, b, refs)
+				end, limit, reliable)
+				lanes[player] = found
+			end
+			return found
 		end
-		return found
+		return lanes, lane_for
 	end
 
-	local function unreliable_for(player: Player): libtypes.Channel?
-		local found = players_unreliable[player]
-		if not found and not gone[player] then
-			found = channel.new(function(b, refs)
-				UnreliableEvent:FireClient(player, b, refs)
-			end, constants.MAX_UNRELIABLE_SIZE)
-			players_unreliable[player] = found
+	local players_reliable, reliable_for = per_player(function(player, b, refs)
+		ReliableEvent:FireClient(player, b, refs)
+	end, math.huge, true)
+	local players_unreliable, unreliable_for = per_player(function(player, b, refs)
+		UnreliableEvent:FireClient(player, b, refs)
+	end, constants.MAX_UNRELIABLE_SIZE, false)
+
+	-- fire and fire_all keep one order: a reliable lane is sent early before the other one takes a message,
+	-- so only one side ever has messages waiting
+	local last_global = false
+	local function to_all()
+		if not last_global then
+			for _, lane in players_reliable do
+				flush(lane)
+			end
+			last_global = true
 		end
-		return found
+	end
+	local function to_players()
+		if last_global then
+			flush(global_reliable)
+			last_global = false
+		end
 	end
 
 	local function create_object(intermediate: libtypes.Intermediate<any, any>): any
@@ -827,21 +888,26 @@ local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateS
 			return r
 		elseif intermediate.__kind == "event" then
 			local write = intermediate.schema.write
-			local global = if intermediate.reliable then global_reliable else global_unreliable
-			local channel_for: (Player) -> libtypes.Channel? = if intermediate.reliable
-				then reliable_for
-				else unreliable_for
+			local reliable = intermediate.reliable
+			local global = if reliable then global_reliable else global_unreliable
+			local channel_for: (Player) -> libtypes.Channel? = if reliable then reliable_for else unreliable_for
 
 			local r: libtypes.ServerRemote = table.freeze({
 				connect = function(self, callback)
 					return connections.add(id, callback)
 				end,
 				fire_all = function(self, data)
+					if reliable then
+						to_all()
+					end
 					append(global, id, write, data)
 				end,
 				fire = function(self, p, data)
 					local target = channel_for(p)
 					if target then
+						if reliable then
+							to_players()
+						end
 						append(target, id, write, data)
 					end
 				end,
@@ -853,35 +919,47 @@ local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateS
 		error("INVALID __KIND! EXPECTED function | event")
 	end
 
-	local function size_error(len: number): string
-		return `BUFFER OF SIZE {len} EXCEEDS {max_size}B! SET THE SECOND PARAMETER OF THE INIT() FUNCTION TO A BIGGER VALUE!`
+	-- before anything is started, so bad definitions leave nothing behind
+	local converted, signature = iter_and_convert(t, create_object)
+	__init = true
+
+	-- logged, not raised: any client can send anything, as often as it likes
+	local function accept(buf: any, ref: any): boolean
+		if not validate(buf, ref) then
+			logger.orange("DROPPED AN INVALID PACKET")
+			return false
+		end
+		local len = buffer.len(buf)
+		if len > max_size then
+			logger.orange(
+				`BUFFER OF SIZE {len} EXCEEDS {max_size}B! PASS A BIGGER SIZE AS THE SECOND ARGUMENT OF create_server`
+			)
+			return false
+		end
+		return true
 	end
 
-	local function on_event(player: Player, buf, ref)
-		if not validate(buf, ref) then
-			return
+	local function on_event(player: Player, buf: any, ref: any)
+		if accept(buf, ref) then
+			read(buf, ref, player)
 		end
-		if buffer.len(buf) > max_size then
-			error(size_error(buffer.len(buf)))
-		end
-		ref_tracker.set(ref)
-		read_server(buf, player)
 	end
 
 	UnreliableEvent.OnServerEvent:Connect(on_event)
 	ReliableEvent.OnServerEvent:Connect(on_event)
 
 	RemoteFunction.OnServerInvoke = function(plr, b, ref): any
-		if not validate(b, ref) then
+		if not accept(b, ref) then
 			return false, nil, nil
 		end
-		if buffer.len(b) > max_size then
-			-- raised on its own thread: an error in here would throw inside the client's invoke()
-			task.spawn(error :: any, size_error(buffer.len(b)))
-			return false, nil, nil
+		local ok, out, refs = read_server_remote_function(plr, b, ref)
+		-- the reply must not overtake events fired to this player before it
+		flush(global_reliable)
+		local lane = players_reliable[plr]
+		if lane then
+			flush(lane)
 		end
-		ref_tracker.set(ref)
-		return read_server_remote_function(plr, b)
+		return ok, out, refs
 	end
 
 	Players.PlayerRemoving:Connect(function(player)
@@ -899,10 +977,14 @@ local function init<T>(t: T & {}, max_buffer_size: number?): libtypes.ReplicateS
 
 	RunService.Heartbeat:Connect(channel.flush_all)
 
+	-- read by the client: its batches must fit max_size, and its ids must match these
+	ReliableEvent:SetAttribute(constants.MAX_SIZE_ATTRIBUTE, max_size)
+	ReliableEvent:SetAttribute(constants.SIGNATURE_ATTRIBUTE, signature)
+
 	ReliableEvent.Parent = constants.EVENT_FOLDER
 	UnreliableEvent.Parent = constants.EVENT_FOLDER
 	RemoteFunction.Parent = constants.EVENT_FOLDER
-	return iter_and_convert(t, create_object) :: never
+	return converted :: never
 end
 
 return init
@@ -913,18 +995,26 @@ return init
         <Properties>
           <string name="Name">shared</string>
           <string name="Source"><![CDATA[local schema = require(script.Parent.Parent.features.schema)
-local id_tracker = require(script.Parent.Parent.trackers["id-tracker"])
 local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local libtypes = require(script.Parent.Parent.util.libtypes)
+
+-- a schema left out is nil, not a T nothing constrains, so a payload given for it is a type error
+type Event =
+	(<T>(input: libtypes.Schema<T>) -> libtypes.Intermediate<T, nil, "event">)
+	& (() -> libtypes.Intermediate<nil, nil, "event">)
+type Function =
+	(<T, K>(input: libtypes.Schema<T>, output: libtypes.Schema<K>) -> libtypes.Intermediate<T, K, "function">)
+	& (<K>(input: nil, output: libtypes.Schema<K>) -> libtypes.Intermediate<nil, K, "function">)
+	& (<T>(input: libtypes.Schema<T>) -> libtypes.Intermediate<T, nil, "function">)
+	& (() -> libtypes.Intermediate<nil, nil, "function">)
 
 local function event<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
 	local t = table.freeze({
 		__kind = "event" :: "event",
 		__schema = nil :: T,
-		__schema_output = nil :: T,
+		__schema_output = nil,
 		schema = input or schema.null,
-		schema_output = input or schema.null,
-		id = id_tracker.take(),
+		id = remote_tracker.take(),
 		reliable = true,
 	})
 	remote_tracker.map(t.id, t)
@@ -935,10 +1025,9 @@ local function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<
 	local t = table.freeze({
 		__kind = "event" :: "event",
 		__schema = nil :: T,
-		__schema_output = nil :: T,
+		__schema_output = nil,
 		schema = input or schema.null,
-		schema_output = input or schema.null,
-		id = id_tracker.take(),
+		id = remote_tracker.take(),
 		reliable = false,
 	})
 	remote_tracker.map(t.id, t)
@@ -952,17 +1041,16 @@ local function fn<T, K>(input: libtypes.Schema<T>?, output: libtypes.Schema<K>?)
 		__schema_output = nil :: K,
 		schema = input or schema.null,
 		schema_output = output or schema.null,
-		id = id_tracker.take(),
-		reliable = true,
+		id = remote_tracker.take(),
 	})
 	remote_tracker.map(t.id, t)
 	return t
 end
 
 return table.freeze({
-	fn = fn,
-	unreliable = unreliable,
-	event = event,
+	fn = fn :: Function,
+	unreliable = unreliable :: Event,
+	event = event :: Event,
 })
 ]]></string>
         </Properties>
@@ -976,8 +1064,12 @@ return table.freeze({
         <Properties>
           <string name="Name">connections</string>
           <string name="Source"><![CDATA[local libtypes = require(script.Parent.Parent.util.libtypes)
+local logger = require(script.Parent.Parent.util.logger)
 
 local connection_map: { [number]: { libtypes.Connection } } = {}
+-- reliable events that arrived before anything connected, handed to the first connection like the engine's own queue
+local held: { [number]: { n: number, dropped: boolean, [number]: unknown } } = {}
+local MAX_HELD = 256
 
 -- lists are swapped, never edited, so a dispatch that is mid-loop keeps the one it started with
 local function add(id: number, cb: libtypes.Connection)
@@ -987,6 +1079,19 @@ local function add(id: number, cb: libtypes.Connection)
 	connection_map[id] = entry
 
 	local connected = true
+	local queue = held[id]
+	if queue then
+		held[id] = nil
+		-- deferred so the caller has its disconnect before the first one runs
+		for i = 1, queue.n do
+			task.defer(function()
+				if connected then
+					cb(queue[i])
+				end
+			end)
+		end
+	end
+
 	local function remove()
 		if not connected then
 			return
@@ -996,7 +1101,8 @@ local function add(id: number, cb: libtypes.Connection)
 		if index then
 			local copy = table.clone(connection_map[id])
 			table.remove(copy, index)
-			connection_map[id] = copy
+			-- nil, not {}, so the readers see no listeners
+			connection_map[id] = if #copy > 0 then copy else nil
 		end
 	end
 
@@ -1007,42 +1113,40 @@ local function get(id: number): { libtypes.Connection }?
 	return connection_map[id]
 end
 
+local function hold(id: number, value: unknown)
+	local queue = held[id]
+	if not queue then
+		queue = { n = 0, dropped = false }
+		held[id] = queue
+	end
+	if queue.n == MAX_HELD then
+		if not queue.dropped then
+			queue.dropped = true
+			logger.red(
+				`EVENT #{id} GOT {MAX_HELD} MESSAGES BEFORE ANYTHING CONNECTED, LATER ONES ARE DROPPED UNTIL ONE DOES`
+			)
+		end
+		return
+	end
+	queue.n += 1
+	queue[queue.n] = value
+end
+
 return table.freeze({
 	add = add,
 	get = get,
+	hold = hold,
 })
 ]]></string>
         </Properties>
       </Item>
       <Item class="ModuleScript" referent="12">
         <Properties>
-          <string name="Name">id-tracker</string>
-          <string name="Source"><![CDATA[local globalid = 0
-
-local function take()
-	globalid += 1
-	-- ids travel as a u8
-	assert(globalid <= 255, "REMOTE LIMIT OF 255 REACHED")
-	return globalid
-end
-local function get()
-	return globalid
-end
-
-return table.freeze({
-	take = take,
-	get = get,
-})
-]]></string>
-        </Properties>
-      </Item>
-      <Item class="ModuleScript" referent="13">
-        <Properties>
           <string name="Name">ref-tracker</string>
-          <string name="Source"><![CDATA[local current: { unknown }
+          <string name="Source"><![CDATA[local current: { unknown }?
 
 return table.freeze({
-	set = function(refs)
+	set = function(refs: { unknown }?)
 		current = refs
 	end,
 	get = function()
@@ -1052,18 +1156,21 @@ return table.freeze({
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="14">
+      <Item class="ModuleScript" referent="13">
         <Properties>
           <string name="Name">remote-tracker</string>
           <string name="Source"><![CDATA[local libtypes = require(script.Parent.Parent.util.libtypes)
-local logger = require(script.Parent.Parent.util.logger)
 local remotes: { [number]: libtypes.Intermediate<any, any, any> } = {}
 
+-- ids are handed out in order from 1, so the next one is always #remotes + 1
+local function take(): number
+	local id = #remotes + 1
+	-- ids travel as a u8
+	assert(id <= 255, "REMOTE LIMIT OF 255 REACHED")
+	return id
+end
+
 local function map(key: number, remote: any)
-	if remotes[key] then
-		logger.orange(`REMOTE #{key} ALREADY EXISTS`)
-		return
-	end
 	remotes[key] = remote
 end
 
@@ -1071,19 +1178,20 @@ local function get()
 	return remotes
 end
 
-return {
+return table.freeze({
+	take = take,
 	map = map,
 	get = get,
-}
+})
 ]]></string>
         </Properties>
       </Item>
     </Item>
-    <Item class="Folder" referent="15">
+    <Item class="Folder" referent="14">
       <Properties>
         <string name="Name">util</string>
       </Properties>
-      <Item class="ModuleScript" referent="16">
+      <Item class="ModuleScript" referent="15">
         <Properties>
           <string name="Name">callbacks</string>
           <string name="Source"><![CDATA[local libtypes = require(script.Parent.libtypes)
@@ -1092,7 +1200,7 @@ local callbacks: { [number]: libtypes.Callback } = {}
 
 local function set(id: number, cb: libtypes.Callback)
 	if callbacks[id] then
-		logger.orange(`CALLBACKS CAN ONLY BE SET ONCE! ID #{id}`)
+		logger.red(`CALLBACKS CAN ONLY BE SET ONCE! ID #{id}, THE FIRST ONE IS KEPT`)
 		return
 	end
 	callbacks[id] = cb
@@ -1109,7 +1217,7 @@ return table.freeze({
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="17">
+      <Item class="ModuleScript" referent="16">
         <Properties>
           <string name="Name">channel</string>
           <string name="Source"><![CDATA[--!native
@@ -1120,83 +1228,119 @@ local libtypes = require(script.Parent.libtypes)
 local logger = require(script.Parent.logger)
 local writer = require(script.Parent.writer)
 
-local load = writer.load
-local u8 = writer.u8
-local export = writer.export
+local message = writer.message
 
 local SHRINK_FLOOR = 4096
-local MAX_REFS = 255
+local MAX_REFS = constants.MAX_REFS
+local MAX_MESSAGES = constants.MAX_MESSAGES
+local REF_BYTES = constants.REF_BYTES
 
 -- channels written to since the last flush_all
 local dirty: { libtypes.Channel } = {}
+-- channels a flush left above SHRINK_FLOOR, dropped to it if they stay quiet until the next flush_all
+local oversized: { libtypes.Channel } = {}
 
-local function new(send: (buffer, { unknown }?) -> (), limit: number): libtypes.Channel
+local function new(send: (buffer, { unknown }?) -> (), limit: number, reliable: boolean): libtypes.Channel
 	return {
-		size = constants.LARGE_BUFFER_SIZE,
 		inner = buffer.create(constants.LARGE_BUFFER_SIZE),
 		cursor = 0,
+		count = 0,
 		references = {},
 		send = send,
 		limit = limit,
+		reliable = reliable,
 	}
 end
 
 local function flush(channel: libtypes.Channel)
 	local used = channel.cursor
+	if used == 0 then
+		return
+	end
 	local b, refs = dump(channel)
 	channel.cursor = 0
-	channel.send(b, refs)
+	channel.count = 0
+	-- a send that throws (a cyclic table ref) loses this batch, not the channel
+	local sent, why = pcall(channel.send :: any, b, refs)
 	table.clear(channel.references)
+	if not sent then
+		logger.red(`DROPPED A {used}B BATCH, SENDING IT FAILED: {why}`)
+	end
 
 	-- one spike should not pin a huge buffer forever
-	if channel.size > SHRINK_FLOOR and used * 8 < channel.size then
-		channel.size //= 2
-		channel.inner = buffer.create(channel.size)
+	local size = buffer.len(channel.inner)
+	if size > SHRINK_FLOOR then
+		if used * 8 < size then
+			channel.inner = buffer.create(size // 2)
+		end
+		oversized[#oversized + 1] = channel
+	end
+end
+
+local function drop_refs_after(references: { unknown }, keep: number)
+	for i = #references, keep + 1, -1 do
+		references[i] = nil
 	end
 end
 
 local function append(channel: libtypes.Channel, id: number, write: (any) -> (), data: any)
 	local start, ref_start = channel.cursor, #channel.references
-	load(channel)
-	u8(id)
-	write(data)
-	export()
+	-- a write that throws queues nothing, not even the refs it wrote before throwing
+	local wrote, why = pcall(message :: any, channel, id, write, data)
+	if not wrote then
+		drop_refs_after(channel.references, ref_start)
+		error(why, 0)
+	end
 
-	local alone = start == 0
-	if alone then
-		dirty[#dirty + 1] = channel
-	elseif channel.cursor > channel.limit or #channel.references > MAX_REFS then
-		-- does not fit with what is queued: send that, then write this one again on its own
-		local references = channel.references
-		for i = #references, ref_start + 1, -1 do
-			references[i] = nil
+	-- this message on its own, whatever is queued before it
+	local bytes, refs = channel.cursor - start, #channel.references - ref_start
+	local oversized = bytes + refs * REF_BYTES > channel.limit
+	if refs > MAX_REFS or (oversized and not channel.reliable) then
+		drop_refs_after(channel.references, ref_start)
+		channel.cursor = start
+		if refs > MAX_REFS then
+			-- ref indices are one byte, past MAX_REFS they would point at the wrong refs
+			error(`REMOTE #{id} WROTE {refs} REFS, ONE MESSAGE CAN CARRY {MAX_REFS}`)
 		end
+		-- the engine would drop it anyway
+		logger.red(
+			`DROPPED A {bytes}B UNRELIABLE MESSAGE WITH {refs} REFS FROM REMOTE #{id}, OVER THE {channel.limit}B LIMIT`
+		)
+		return
+	end
+
+	if start == 0 then
+		dirty[#dirty + 1] = channel
+	elseif
+		channel.cursor + #channel.references * REF_BYTES > channel.limit
+		or #channel.references > MAX_REFS
+		or channel.count == MAX_MESSAGES
+	then
+		-- does not fit with what is queued: send that, then write this one again on its own
+		drop_refs_after(channel.references, ref_start)
 		channel.cursor = start
 		flush(channel)
 
-		load(channel)
-		u8(id)
-		write(data)
-		export()
-		alone = true
+		message(channel, id, write, data)
 	end
+	channel.count += 1
 
-	if alone then
-		if channel.cursor > channel.limit then
-			logger.orange(
-				`REMOTE #{id} WROTE {channel.cursor}B, OVER THE {channel.limit}B UNRELIABLE LIMIT! IT WILL BE DROPPED`
-			)
-		elseif #channel.references > MAX_REFS then
-			logger.orange(`REMOTE #{id} WROTE {#channel.references} REFS, ONE PACKET CAN ONLY INDEX {MAX_REFS}`)
-		end
+	if oversized then
+		logger.red(
+			`REMOTE #{id} WROTE A {bytes}B MESSAGE WITH {refs} REFS, OVER THE {channel.limit}B LIMIT! IT WILL LIKELY BE DROPPED`
+		)
 	end
 end
 
 local function flush_all()
-	for _, channel in dirty do
-		if channel.cursor > 0 then
-			flush(channel)
+	for _, channel in oversized do
+		if channel.cursor == 0 and buffer.len(channel.inner) > SHRINK_FLOOR then
+			channel.inner = buffer.create(SHRINK_FLOOR)
 		end
+	end
+	table.clear(oversized)
+	for _, channel in dirty do
+		flush(channel)
 	end
 	table.clear(dirty)
 end
@@ -1204,12 +1348,14 @@ end
 return table.freeze({
 	new = new,
 	append = append,
+	-- sends what is queued now, for callers keeping order with another channel
+	flush = flush,
 	flush_all = flush_all,
 })
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="18">
+      <Item class="ModuleScript" referent="17">
         <Properties>
           <string name="Name">dump</string>
           <string name="Source"><![CDATA[local libtypes = require(script.Parent.libtypes)
@@ -1222,45 +1368,53 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="19">
+      <Item class="ModuleScript" referent="18">
         <Properties>
           <string name="Name">iter-and-convert</string>
           <string name="Source"><![CDATA[local libtypes = require(script.Parent.libtypes)
+local remote_names = require(script.Parent["remote-names"])
 @native
-local function iter_and_convert<T>(t: T & { [any]: any }, ctor: (libtypes.Intermediate) -> any): T
+local function iter_and_convert<T>(t: T & { [any]: any }, ctor: (libtypes.Intermediate<any, any, any>) -> any): (T, string)
 	local result = {}
+	-- "id path" for every remote, hashed below so the two sides can compare what they built
+	local lines = {}
 
-	local function recursive_index(origin: { [any]: any }, write_to: { [any]: any })
+	local function recursive_index(origin: { [any]: any }, write_to: { [any]: any }, path: string)
 		for i, v in pairs(origin) do
+			local key = path .. tostring(i)
+			if type(v) ~= "table" then
+				error(`DEFINITIONS KEY {key} IS NOT A REMOTE OR A TABLE OF REMOTES`)
+			end
 			local is_schema = v.__kind and v.id
 
 			if not is_schema then
 				local new_table = {}
 				write_to[i] = new_table
-				recursive_index(v, new_table)
+				recursive_index(v, new_table, key .. ".")
 				continue
 			end
 			write_to[i] = ctor(v)
+			table.insert(lines, `{v.id} {key}`)
 		end
 	end
 
-	recursive_index(t, result)
+	recursive_index(t, result, "")
+	table.sort(lines)
 
-	return table.freeze(result)
+	return table.freeze(result) :: any, remote_names.hash(table.concat(lines, "\n"))
 end
 
 return iter_and_convert
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="20">
+      <Item class="ModuleScript" referent="19">
         <Properties>
           <string name="Name">libtypes</string>
           <string name="Source"><![CDATA[-- types:
 
 export type Buffer = {
 	cursor: number,
-	size: number,
 	references: { unknown },
 	inner: buffer,
 }
@@ -1268,34 +1422,28 @@ export type Buffer = {
 export type Channel = Buffer & {
 	send: (buffer, { unknown }?) -> (),
 	limit: number,
+	-- an unreliable channel drops a message over limit instead of sending it
+	reliable: boolean,
+	-- messages in the batch
+	count: number,
 }
 
 export type function GetSchema(t: type, schemaindex: string)
 	return t:readproperty(types.singleton(schemaindex))
 end
 
+-- a field's type is its schema's __T as is: nested structs already resolved theirs
 export type function GetNestedSchema(t: type)
 	local nt = types.newtable()
-	local function traverse(t: type, n: type)
-		for i, v in t:properties() do
-			local tx = GetSchema(v.read or types.never, "__T")
-			if tx:is("table") then
-				local ntx = types.newtable()
-				n:setproperty(types.singleton(i:value()), ntx)
-				traverse(tx, ntx)
-			else
-				n:setproperty(types.singleton(i:value()), tx)
-			end
-		end
+	for i, v in t:properties() do
+		nt:setproperty(types.singleton(i:value()), GetSchema(v.read or types.never, "__T"))
 	end
-	traverse(t, nt)
-
 	return nt
 end
 
 export type Middleware = (id: number, plr: Player) -> boolean
 export type Connection = (...any) -> ()
-export type Callback = (...any) -> (boolean, any)
+export type Callback = (...any) -> (boolean, ...any)
 export type Cleanup = () -> ()
 
 export type Schema<T = nil> = {
@@ -1306,12 +1454,14 @@ export type Schema<T = nil> = {
 
 export type Intermediate<T = nil, O = nil, K = never> = {
 	read schema: Schema<T>,
-	read schema_output: Schema<O>,
+	-- functions only
+	read schema_output: Schema<O>?,
 	read __schema_output: O,
 	read __schema: T,
 	read __kind: K,
 	read id: number,
-	read reliable: boolean,
+	-- events only
+	read reliable: boolean?,
 }
 
 export type ClientRemote<T = nil> = {
@@ -1321,7 +1471,7 @@ export type ClientRemote<T = nil> = {
 	read __kind: "event",
 }
 export type ClientFunction<T = nil, O = nil> = {
-	read invoke: (any, T) -> (boolean, O),
+	read invoke: (any, T) -> (boolean, O?),
 	read __T: T,
 	read __O: O,
 	read __kind: "function",
@@ -1334,13 +1484,14 @@ export type ServerRemote<T = nil> = {
 	read __kind: "event",
 }
 export type ServerFunction<T = nil, O = nil> = {
-	read set_callback: (any, (Player, T) -> (boolean, O)) -> (),
+	-- O? so a refusal can return false, nil as well as false
+	read set_callback: (any, (Player, T) -> (boolean, ...O?)) -> (),
 	read __T: T,
 	read __O: O,
 	read __kind: "function",
 }
 
-type function ClientSearchAndReplace(input: type, relative_write_to: type): ()
+type function SearchAndReplace(input: type, relative_write_to: type, server: boolean): ()
 	assert(input:is("table"), "NOT A TABLE")
 
 	for i, v in input:properties() do
@@ -1355,9 +1506,10 @@ type function ClientSearchAndReplace(input: type, relative_write_to: type): ()
 				assert(remote_kind, "FAILED TO GET KIND")
 				remote_kind = remote_kind:value()
 				if remote_kind == "function" then
-					substituted = ClientFunction(schema, schema_output or types.singleton(nil))
+					local output = schema_output or types.singleton(nil)
+					substituted = if server then ServerFunction(schema, output) else ClientFunction(schema, output)
 				elseif remote_kind == "event" then
-					substituted = ClientRemote(schema)
+					substituted = if server then ServerRemote(schema) else ClientRemote(schema)
 				end
 			end
 			assert(substituted, "NO SUBSTITUTE")
@@ -1365,50 +1517,20 @@ type function ClientSearchAndReplace(input: type, relative_write_to: type): ()
 		else
 			local tempnt = types.newtable()
 			relative_write_to:setreadproperty(i, tempnt)
-			ClientSearchAndReplace(t, tempnt)
-		end
-	end
-end
-
-type function ServerSearchAndReplace(input: type, relative_write_to: type): ()
-	assert(input:is("table"), "NOT A TABLE")
-
-	for i, v in input:properties() do
-		local t = assert(v.read)
-
-		local schema = GetSchema(t, "__schema")
-		local schema_output = GetSchema(t, "__schema_output")
-		if schema then -- is Intermediate
-			local substituted: type
-			do
-				local remote_kind = t:readproperty(types.singleton("__kind"))
-				assert(remote_kind, "FAILED TO GET KIND")
-				remote_kind = remote_kind:value()
-				if remote_kind == "function" then
-					substituted = ServerFunction(schema, schema_output or types.singleton(nil))
-				elseif remote_kind == "event" then
-					substituted = ServerRemote(schema)
-				end
-			end
-			assert(substituted, "NO SUBSTITUTE")
-			relative_write_to:setreadproperty(i, substituted)
-		else
-			local tempnt = types.newtable()
-			relative_write_to:setreadproperty(i, tempnt)
-			ServerSearchAndReplace(t, tempnt)
+			SearchAndReplace(t, tempnt, server)
 		end
 	end
 end
 
 export type function ReplicateClient(original: type)
 	local ot = types.newtable()
-	ClientSearchAndReplace(original, ot)
+	SearchAndReplace(original, ot, false)
 	return ot
 end
 
 export type function ReplicateServer(original: type)
 	local ot = types.newtable()
-	ServerSearchAndReplace(original, ot)
+	SearchAndReplace(original, ot, true)
 	return ot
 end
 
@@ -1416,85 +1538,47 @@ return nil
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="21">
+      <Item class="ModuleScript" referent="20">
         <Properties>
           <string name="Name">logger</string>
           <string name="Source"><![CDATA[local RunService = game:GetService("RunService")
 
 local constants = require(script.Parent.Parent.constants)
-local is_debug = RunService:IsStudio() or (workspace:GetAttribute(constants.IS_DEBUG_ATTRIBUTE) == true)
 local template = "[sendbufs]:"
 
-local function white(...: string)
-	if not is_debug then
-		return
-	end
-	print(template, ...)
+-- read on every call so the attribute can be flipped on a live server
+local function is_debug(): boolean
+	return RunService:IsStudio() or workspace:GetAttribute(constants.IS_DEBUG_ATTRIBUTE) == true
 end
 
+-- for what any client can cause at will, so only shown in debug
 local function orange(...: string)
-	if not is_debug then
+	if not is_debug() then
 		return
 	end
 	warn(template, ...)
 end
 
-local function errorif(cond: boolean, str: string)
-	if cond then
-		error(str)
-	end
+-- for mistakes in the game's own code, always shown, without stopping the caller
+local function red(...: string)
+	task.spawn(error :: (string, number) -> (), table.concat({ template, ... }, " "), 0)
 end
 
 return table.freeze({
-	errorif = errorif,
-	white = white,
 	orange = orange,
+	red = red,
 })
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="22">
-        <Properties>
-          <string name="Name">read-client</string>
-          <string name="Source"><![CDATA[--!native
---!optimize 2
-local connections = require(script.Parent.Parent.trackers.connections)
-local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
-local logger = require(script.Parent.logger)
-
-local remotes = remote_tracker.get()
-local get_listeners = connections.get
-
-return function(b: buffer)
-	local cursor, size = 0, buffer.len(b)
-	while cursor < size do
-		local id = buffer.readu8(b, cursor)
-		local remo = remotes[id]
-		if not remo or remo.__kind ~= "event" then
-			logger.orange(`INVALID EVENT ID! #{id}`)
-			return
-		end
-
-		local value, nc = remo.schema.read(b, cursor + 1)
-		cursor += nc + 1
-
-		local listeners = get_listeners(id)
-		if listeners ~= nil then
-			for _, v in listeners do
-				task.spawn(v, value)
-			end
-		end
-	end
-end
-]]></string>
-        </Properties>
-      </Item>
-      <Item class="ModuleScript" referent="23">
+      <Item class="ModuleScript" referent="21">
         <Properties>
           <string name="Name">read-server-remote-function</string>
           <string name="Source"><![CDATA[--!native
 --!optimize 2
+local constants = require(script.Parent.Parent.constants)
 local middleware = require(script.Parent.Parent.features.middleware)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local callbacks = require(script.Parent.callbacks)
 local dump = require(script.Parent.dump)
@@ -1504,7 +1588,7 @@ local small_buffer = require(script.Parent["small-buffer"])
 
 local remotes = remote_tracker.get()
 
-return function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
+return function(plr: Player, b: buffer, refs: { unknown }?): (boolean, buffer?, { unknown }?)
 	local id = buffer.readu8(b, 0)
 	local remo = remotes[id]
 
@@ -1513,6 +1597,7 @@ return function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
 		return false, nil, nil
 	end
 
+	ref_tracker.set(refs)
 	local read, value = pcall(remo.schema.read, b, 1)
 	if not read then
 		logger.orange(`MALFORMED PAYLOAD FOR FUNCTION #{id}: {value}`)
@@ -1532,75 +1617,110 @@ return function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
 
 	local ran, success, res = pcall(callback, plr, value)
 	if not ran then
-		logger.orange(`CALLBACK FAILED: {success}`)
+		logger.red(`CALLBACK FOR FUNCTION #{id} FAILED: {success}`)
 		return false, nil, nil
 	end
 	if not success then
 		return false, nil, nil
 	end
 
-	writer.load(small_buffer())
-	local wrote, why = pcall(remo.schema_output.write :: any, res)
+	local out = small_buffer()
+	writer.load(out)
+	local wrote, why = pcall((remo.schema_output :: any).write, res)
 	if not wrote then
-		logger.orange(`FUNCTION #{id} RETURNED A VALUE ITS SCHEMA CANNOT WRITE: {why}`)
+		logger.red(`FUNCTION #{id} RETURNED A VALUE ITS SCHEMA CANNOT WRITE: {why}`)
 		return false, nil, nil
 	end
-	return true, dump(writer.export())
+	writer.export()
+	local count = #out.references
+	if count > constants.MAX_REFS then
+		-- ref indices are one byte, past MAX_REFS they would point at the wrong refs
+		logger.red(`FUNCTION #{id} RETURNED {count} REFS, ONE REPLY CAN CARRY {constants.MAX_REFS}`)
+		return false, nil, nil
+	end
+	return true, dump(out)
 end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="24">
+      <Item class="ModuleScript" referent="22">
         <Properties>
-          <string name="Name">read-server</string>
+          <string name="Name">read</string>
           <string name="Source"><![CDATA[--!native
 --!optimize 2
+local constants = require(script.Parent.Parent.constants)
 local middleware = require(script.Parent.Parent.features.middleware)
 local connections = require(script.Parent.Parent.trackers.connections)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local logger = require(script.Parent.logger)
 
 local remotes = remote_tracker.get()
 local run_middleware = middleware.run_middleware
 local get_listeners = connections.get
+local hold = connections.hold
+local set_refs = ref_tracker.set
 
--- the id being read, for the log line below
-local reading = 0
+local MAX_MESSAGES = constants.MAX_MESSAGES
 
-local function read_packet(b: buffer, plr: Player)
+-- one packet of events; plr is who sent it on the server, nil on the client
+return function(b: buffer, refs: { unknown }?, plr: Player?)
+	-- a bad packet from a client is its own doing, from the server it is the game's
+	local log = if plr then logger.orange else logger.red
 	local cursor, size = 0, buffer.len(b)
-	while cursor < size do
+	-- ids whose middleware refused this packet, so a packet of copies runs it once
+	local refused: { [number]: true }? = nil
+
+	for _ = 1, MAX_MESSAGES do
+		if cursor >= size then
+			return
+		end
 		local id = buffer.readu8(b, cursor)
 		local remo = remotes[id]
 		if not remo or remo.__kind ~= "event" then
-			logger.orange(`INVALID EVENT ID! #{id}`)
+			log(`INVALID EVENT ID! #{id}`)
 			return
 		end
 
-		reading = id
-		local value, nc = remo.schema.read(b, cursor + 1)
+		-- set before every read: a middleware or listener that yields lets another packet set its own
+		set_refs(refs)
+		-- nothing past a bad message can be trusted, so the rest of the packet is dropped
+		local read, value, nc = pcall(remo.schema.read, b, cursor + 1)
+		if not read then
+			log(`MALFORMED PAYLOAD FOR EVENT #{id}: {value}`)
+			return
+		end
 		cursor += nc + 1
 
 		local listeners = get_listeners(id)
-		if listeners ~= nil and run_middleware(id, plr) then
-			for _, v in listeners do
-				task.spawn(v, plr, value)
+		if plr then
+			if listeners and not (refused and refused[id]) then
+				if run_middleware(id, plr) then
+					for _, v in listeners do
+						task.spawn(v, plr, value)
+					end
+				else
+					refused = refused or {}
+					refused[id] = true
+				end
 			end
+		elseif listeners then
+			for _, v in listeners do
+				task.spawn(v, value)
+			end
+		elseif remo.reliable then
+			hold(id, value)
 		end
 	end
-end
 
--- one pcall a packet: nothing past a bad message can be trusted, so the rest of it is dropped
-return function(b: buffer, plr: Player)
-	local read, why = pcall(read_packet :: any, b, plr)
-	if not read then
-		logger.orange(`MALFORMED PAYLOAD FOR EVENT #{reading}: {why}`)
+	if cursor < size then
+		log(`PACKET CARRIED OVER {MAX_MESSAGES} MESSAGES, THE REST WAS DROPPED`)
 	end
 end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="25">
+      <Item class="ModuleScript" referent="23">
         <Properties>
           <string name="Name">remote-names</string>
           <string name="Source"><![CDATA[-- names hashed from the JobId: both sides get the same ones without a handshake, and no two servers share them
@@ -1625,16 +1745,22 @@ end
 -- studio has no job, and its two sides spell that differently: the server reads "", the client this
 local NO_JOB = "00000000-0000-0000-0000-000000000000"
 
-return function(job_id: string): (string, string, string)
+local function names(job_id: string): (string, string, string)
 	if job_id == NO_JOB then
 		job_id = ""
 	end
 	return guid("reliable" .. job_id), guid("unreliable" .. job_id), guid("function" .. job_id)
 end
+
+return table.freeze({
+	names = names,
+	-- also hashes the definitions, so the client can check it built the same ids as the server
+	hash = guid,
+})
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="26">
+      <Item class="ModuleScript" referent="24">
         <Properties>
           <string name="Name">small-buffer</string>
           <string name="Source"><![CDATA[local constants = require(script.Parent.Parent.constants)
@@ -1642,7 +1768,6 @@ end
 local libtypes = require(script.Parent.libtypes)
 return @native function(): libtypes.Buffer
 	return {
-		size = constants.MIN_BUFFER_SIZE,
 		inner = buffer.create(constants.MIN_BUFFER_SIZE),
 		cursor = 0,
 		references = {},
@@ -1651,12 +1776,11 @@ end
 ]]></string>
         </Properties>
       </Item>
-      <Item class="ModuleScript" referent="27">
+      <Item class="ModuleScript" referent="25">
         <Properties>
           <string name="Name">writer</string>
           <string name="Source"><![CDATA[--!native
 --!optimize 2
-local constants = require(script.Parent.Parent.constants)
 local libtypes = require(script.Parent.libtypes)
 
 local current: libtypes.Buffer
@@ -1678,13 +1802,23 @@ local function grow(bytes: number)
 	inner = newBuffer
 end
 
-local bufferWriter = {}
-
-function bufferWriter.alloc(bytes: number)
-	if cursor + bytes > size then
-		grow(bytes)
+-- tables are copied so a ref carries what they held at fire time, not at flush
+local function snapshot(value: any, seen: { [any]: any }): any
+	if type(value) ~= "table" then
+		return value
 	end
+	local copy = seen[value]
+	if copy == nil then
+		copy = {}
+		seen[value] = copy
+		for k, v in pairs(value) do
+			copy[k] = snapshot(v, seen)
+		end
+	end
+	return copy
 end
+
+local bufferWriter = {}
 
 function bufferWriter.u8(value: number)
 	if cursor + 1 > size then
@@ -1706,11 +1840,15 @@ function bufferWriter.reference(value: any)
 	if cursor + 1 > size then
 		grow(1)
 	end
-	if value == nil then
-		value = constants.VOID
+	-- nil is index 0 and takes no slot, refs start at 1
+	local index = 0
+	if value ~= nil then
+		if type(value) == "table" then
+			value = snapshot(value, {})
+		end
+		index = #references + 1
+		references[index] = value
 	end
-	local index = #references + 1
-	references[index] = value
 	buffer.writeu8(inner, cursor, index)
 	cursor += 1
 end
@@ -1741,6 +1879,10 @@ end
 
 -- LEB128: 7 bits per byte, so lengths under 128 cost one byte
 function bufferWriter.varint(value: number)
+	-- integers under 2^53 are exact and fit the 8 bytes the reader accepts
+	if value < 0 or value >= 2 ^ 53 or value // 1 ~= value then
+		error(`VARINT TAKES AN INTEGER FROM 0 TO 2^53 - 1, GOT {value}`)
+	end
 	if cursor + 8 > size then
 		grow(8)
 	end
@@ -1770,16 +1912,6 @@ function bufferWriter.i32(value: number)
 	cursor += 4
 end
 
-function bufferWriter.f32NoAlloc(value: number)
-	buffer.writef32(inner, cursor, value)
-	cursor += 4
-end
-
-function bufferWriter.f64NoAlloc(value: number)
-	buffer.writef64(inner, cursor, value)
-	cursor += 8
-end
-
 function bufferWriter.f32(value: number)
 	if cursor + 4 > size then
 		grow(4)
@@ -1796,11 +1928,6 @@ function bufferWriter.f64(value: number)
 	cursor += 8
 end
 
-function bufferWriter.copy(value)
-	buffer.copy(inner, cursor, value)
-	cursor += buffer.len(value)
-end
-
 function bufferWriter.bool(val: boolean)
 	if cursor + 1 > size then
 		grow(1)
@@ -1811,19 +1938,25 @@ end
 
 function bufferWriter.load(channel: libtypes.Buffer)
 	current = channel
-	size = channel.size
 	cursor = channel.cursor
 	references = channel.references
 	inner = channel.inner
+	size = buffer.len(inner)
 end
 
 function bufferWriter.export()
-	current.size = size
 	current.cursor = cursor
-	current.references = references
 	current.inner = inner
 
 	return current
+end
+
+-- one message: its remote id, then its payload
+function bufferWriter.message(target: libtypes.Buffer, id: number, write: (any) -> (), data: any)
+	bufferWriter.load(target)
+	bufferWriter.u8(id)
+	write(data)
+	bufferWriter.export()
 end
 
 return bufferWriter

@@ -1,16 +1,24 @@
 local schema = require(script.Parent.Parent.features.schema)
-local id_tracker = require(script.Parent.Parent.trackers["id-tracker"])
 local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local libtypes = require(script.Parent.Parent.util.libtypes)
+
+-- a schema left out is nil, not a T nothing constrains, so a payload given for it is a type error
+type Event =
+	(<T>(input: libtypes.Schema<T>) -> libtypes.Intermediate<T, nil, "event">)
+	& (() -> libtypes.Intermediate<nil, nil, "event">)
+type Function =
+	(<T, K>(input: libtypes.Schema<T>, output: libtypes.Schema<K>) -> libtypes.Intermediate<T, K, "function">)
+	& (<K>(input: nil, output: libtypes.Schema<K>) -> libtypes.Intermediate<nil, K, "function">)
+	& (<T>(input: libtypes.Schema<T>) -> libtypes.Intermediate<T, nil, "function">)
+	& (() -> libtypes.Intermediate<nil, nil, "function">)
 
 local function event<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<T, nil, "event">
 	local t = table.freeze({
 		__kind = "event" :: "event",
 		__schema = nil :: T,
-		__schema_output = nil :: T,
+		__schema_output = nil,
 		schema = input or schema.null,
-		schema_output = input or schema.null,
-		id = id_tracker.take(),
+		id = remote_tracker.take(),
 		reliable = true,
 	})
 	remote_tracker.map(t.id, t)
@@ -21,10 +29,9 @@ local function unreliable<T>(input: libtypes.Schema<T>?): libtypes.Intermediate<
 	local t = table.freeze({
 		__kind = "event" :: "event",
 		__schema = nil :: T,
-		__schema_output = nil :: T,
+		__schema_output = nil,
 		schema = input or schema.null,
-		schema_output = input or schema.null,
-		id = id_tracker.take(),
+		id = remote_tracker.take(),
 		reliable = false,
 	})
 	remote_tracker.map(t.id, t)
@@ -38,15 +45,14 @@ local function fn<T, K>(input: libtypes.Schema<T>?, output: libtypes.Schema<K>?)
 		__schema_output = nil :: K,
 		schema = input or schema.null,
 		schema_output = output or schema.null,
-		id = id_tracker.take(),
-		reliable = true,
+		id = remote_tracker.take(),
 	})
 	remote_tracker.map(t.id, t)
 	return t
 end
 
 return table.freeze({
-	fn = fn,
-	unreliable = unreliable,
-	event = event,
+	fn = fn :: Function,
+	unreliable = unreliable :: Event,
+	event = event :: Event,
 })

@@ -1,6 +1,8 @@
 --!native
 --!optimize 2
+local constants = require(script.Parent.Parent.constants)
 local middleware = require(script.Parent.Parent.features.middleware)
+local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local remote_tracker = require(script.Parent.Parent.trackers["remote-tracker"])
 local callbacks = require(script.Parent.callbacks)
 local dump = require(script.Parent.dump)
@@ -10,7 +12,7 @@ local small_buffer = require(script.Parent["small-buffer"])
 
 local remotes = remote_tracker.get()
 
-return function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
+return function(plr: Player, b: buffer, refs: { unknown }?): (boolean, buffer?, { unknown }?)
 	local id = buffer.readu8(b, 0)
 	local remo = remotes[id]
 
@@ -19,6 +21,7 @@ return function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
 		return false, nil, nil
 	end
 
+	ref_tracker.set(refs)
 	local read, value = pcall(remo.schema.read, b, 1)
 	if not read then
 		logger.orange(`MALFORMED PAYLOAD FOR FUNCTION #{id}: {value}`)
@@ -38,18 +41,26 @@ return function(plr: Player, b: buffer): (boolean, buffer?, { unknown }?)
 
 	local ran, success, res = pcall(callback, plr, value)
 	if not ran then
-		logger.orange(`CALLBACK FAILED: {success}`)
+		logger.red(`CALLBACK FOR FUNCTION #{id} FAILED: {success}`)
 		return false, nil, nil
 	end
 	if not success then
 		return false, nil, nil
 	end
 
-	writer.load(small_buffer())
-	local wrote, why = pcall(remo.schema_output.write :: any, res)
+	local out = small_buffer()
+	writer.load(out)
+	local wrote, why = pcall((remo.schema_output :: any).write, res)
 	if not wrote then
-		logger.orange(`FUNCTION #{id} RETURNED A VALUE ITS SCHEMA CANNOT WRITE: {why}`)
+		logger.red(`FUNCTION #{id} RETURNED A VALUE ITS SCHEMA CANNOT WRITE: {why}`)
 		return false, nil, nil
 	end
-	return true, dump(writer.export())
+	writer.export()
+	local count = #out.references
+	if count > constants.MAX_REFS then
+		-- ref indices are one byte, past MAX_REFS they would point at the wrong refs
+		logger.red(`FUNCTION #{id} RETURNED {count} REFS, ONE REPLY CAN CARRY {constants.MAX_REFS}`)
+		return false, nil, nil
+	end
+	return true, dump(out)
 end

@@ -1,6 +1,5 @@
 --!native
 --!optimize 2
-local constants = require(script.Parent.Parent.constants)
 local libtypes = require(script.Parent.libtypes)
 
 local current: libtypes.Buffer
@@ -22,13 +21,23 @@ local function grow(bytes: number)
 	inner = newBuffer
 end
 
-local bufferWriter = {}
-
-function bufferWriter.alloc(bytes: number)
-	if cursor + bytes > size then
-		grow(bytes)
+-- tables are copied so a ref carries what they held at fire time, not at flush
+local function snapshot(value: any, seen: { [any]: any }): any
+	if type(value) ~= "table" then
+		return value
 	end
+	local copy = seen[value]
+	if copy == nil then
+		copy = {}
+		seen[value] = copy
+		for k, v in pairs(value) do
+			copy[k] = snapshot(v, seen)
+		end
+	end
+	return copy
 end
+
+local bufferWriter = {}
 
 function bufferWriter.u8(value: number)
 	if cursor + 1 > size then
@@ -50,11 +59,15 @@ function bufferWriter.reference(value: any)
 	if cursor + 1 > size then
 		grow(1)
 	end
-	if value == nil then
-		value = constants.VOID
+	-- nil is index 0 and takes no slot, refs start at 1
+	local index = 0
+	if value ~= nil then
+		if type(value) == "table" then
+			value = snapshot(value, {})
+		end
+		index = #references + 1
+		references[index] = value
 	end
-	local index = #references + 1
-	references[index] = value
 	buffer.writeu8(inner, cursor, index)
 	cursor += 1
 end
@@ -85,6 +98,10 @@ end
 
 -- LEB128: 7 bits per byte, so lengths under 128 cost one byte
 function bufferWriter.varint(value: number)
+	-- integers under 2^53 are exact and fit the 8 bytes the reader accepts
+	if value < 0 or value >= 2 ^ 53 or value // 1 ~= value then
+		error(`VARINT TAKES AN INTEGER FROM 0 TO 2^53 - 1, GOT {value}`)
+	end
 	if cursor + 8 > size then
 		grow(8)
 	end
@@ -114,16 +131,6 @@ function bufferWriter.i32(value: number)
 	cursor += 4
 end
 
-function bufferWriter.f32NoAlloc(value: number)
-	buffer.writef32(inner, cursor, value)
-	cursor += 4
-end
-
-function bufferWriter.f64NoAlloc(value: number)
-	buffer.writef64(inner, cursor, value)
-	cursor += 8
-end
-
 function bufferWriter.f32(value: number)
 	if cursor + 4 > size then
 		grow(4)
@@ -140,11 +147,6 @@ function bufferWriter.f64(value: number)
 	cursor += 8
 end
 
-function bufferWriter.copy(value)
-	buffer.copy(inner, cursor, value)
-	cursor += buffer.len(value)
-end
-
 function bufferWriter.bool(val: boolean)
 	if cursor + 1 > size then
 		grow(1)
@@ -155,19 +157,25 @@ end
 
 function bufferWriter.load(channel: libtypes.Buffer)
 	current = channel
-	size = channel.size
 	cursor = channel.cursor
 	references = channel.references
 	inner = channel.inner
+	size = buffer.len(inner)
 end
 
 function bufferWriter.export()
-	current.size = size
 	current.cursor = cursor
-	current.references = references
 	current.inner = inner
 
 	return current
+end
+
+-- one message: its remote id, then its payload
+function bufferWriter.message(target: libtypes.Buffer, id: number, write: (any) -> (), data: any)
+	bufferWriter.load(target)
+	bufferWriter.u8(id)
+	write(data)
+	bufferWriter.export()
 end
 
 return bufferWriter

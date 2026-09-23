@@ -1,15 +1,13 @@
 --!native
 --!optimize 2
-local constants = require(script.Parent.Parent.constants)
 local ref_tracker = require(script.Parent.Parent.trackers["ref-tracker"])
 local libtypes = require(script.Parent.Parent.util.libtypes)
 local writer = require(script.Parent.Parent.util.writer)
 
 local b_u8 = writer.u8
+local b_f32 = writer.f32
 local b_varint = writer.varint
 local writestring = writer.writestring
-
-local VOID = constants.VOID
 
 local freeze = table.freeze :: <T>(T) -> T
 
@@ -45,6 +43,15 @@ local function read_len(b: buffer, o: number): (number, number)
 		end
 	end
 	return len, n
+end
+
+-- # picks any border of a table with a hole, so the array would be cut short without a word
+local function array_len(v: { any }): number
+	local len = #v
+	if table.maxn(v) ~= len then
+		error(`ARRAY HAS A HOLE: # IS {len} BUT THE LAST INDEX IS {table.maxn(v)}`)
+	end
+	return len
 end
 
 local bool: libtypes.Schema<boolean> = {
@@ -99,7 +106,7 @@ local i32: libtypes.Schema<number> = {
 	__T = nil :: never,
 }
 
--- whole numbers up to 2^53, a byte per 7 bits
+-- whole numbers under 2^53, a byte per 7 bits
 local uvar: libtypes.Schema<number> = {
 	read = read_varint,
 	write = b_varint,
@@ -114,6 +121,10 @@ local ivar: libtypes.Schema<number> = {
 		return -(z + 1) / 2, n
 	end,
 	write = function(v)
+		-- zigzag only maps integers, and doubles them into varint's 2^53 range
+		if v // 1 ~= v or v < -2 ^ 52 or v >= 2 ^ 52 then
+			error(`IVAR TAKES AN INTEGER FROM -2^52 TO 2^52 - 1, GOT {v}`)
+		end
 		-- zigzag, so a small negative is as short as a small positive
 		b_varint(if v < 0 then -2 * v - 1 else 2 * v)
 	end,
@@ -164,8 +175,9 @@ end
 local bool_array: libtypes.Schema<{ boolean }> = {
 	read = function(b, cursor)
 		local len, n = read_len(b, cursor)
-		local out = table.create(len) :: { boolean }
 		local c = cursor + n
+		-- no bigger than the rest of the packet can hold, whatever the length claims
+		local out = table.create(math.min(len, (buffer.len(b) - c) * 8)) :: { boolean }
 		local byte = 0
 		for i = 1, len do
 			if i % 8 == 1 then
@@ -178,7 +190,7 @@ local bool_array: libtypes.Schema<{ boolean }> = {
 		return out, c - cursor
 	end,
 	write = function(v)
-		local len = #v
+		local len = array_len(v)
 		b_varint(len)
 		local byte, weight = 0, 1
 		for i = 1, len do
@@ -211,13 +223,17 @@ local function array<T>(input: libtypes.Schema<T>): libtypes.Schema<{ T }>
 			local out: { T } = table.create(math.min(len, buffer.len(b) - arr_cursor))
 			for i = 1, len do
 				local v, size = read(b, arr_cursor)
+				-- read_len only bounds the length by the packet if every element takes space
+				if size == 0 then
+					error("ARRAY ELEMENTS MUST TAKE AT LEAST A BYTE")
+				end
 				out[i] = v
 				arr_cursor += size
 			end
 			return out, arr_cursor - cursor
 		end,
 		write = function(v)
-			local s = #v
+			local s = array_len(v)
 			b_varint(s)
 			for i = 1, s do
 				write(v[i])
@@ -241,7 +257,13 @@ local function map<K, V>(k: libtypes.Schema<K>, v: libtypes.Schema<V>): libtypes
 				map_cursor += klen
 				local value, vlen = vread(b, map_cursor)
 				map_cursor += vlen
-				out[key] = value
+				if klen + vlen == 0 then
+					error("MAP ENTRIES MUST TAKE AT LEAST A BYTE")
+				end
+				-- a key that can't index a table (a ref that has not streamed in, NaN) loses its entry
+				if key ~= nil and key == key then
+					out[key] = value
+				end
 			end
 			return out, map_cursor - cursor
 		end,
@@ -271,7 +293,12 @@ local function set<K>(k: libtypes.Schema<K>): libtypes.Schema<{ [K]: boolean }>
 			for i = 1, len do
 				local key, klen = kread(b, set_cursor)
 				set_cursor += klen
-				out[key] = true
+				if klen == 0 then
+					error("SET KEYS MUST TAKE AT LEAST A BYTE")
+				end
+				if key ~= nil and key == key then
+					out[key] = true
+				end
 			end
 			return out, set_cursor - cursor
 		end,
@@ -411,29 +438,25 @@ local function cframe<T>(input: libtypes.Schema<T & number>): libtypes.Schema<CF
 	return {
 		read = function(buff, init)
 			local c = init
-			local x, y, z, rx, ry, rz, n
+			local x, y, z, n
 			x, n = read(buff, c)
 			c += n
 			y, n = read(buff, c)
 			c += n
 			z, n = read(buff, c)
 			c += n
-			rx, n = read(buff, c)
-			c += n
-			ry, n = read(buff, c)
-			c += n
-			rz, n = read(buff, c)
-			c += n
-			return CFrame.Angles(rx, ry, rz) + Vector3.new(x, y, z), c - init
+			local rx, ry, rz = buffer.readf32(buff, c), buffer.readf32(buff, c + 4), buffer.readf32(buff, c + 8)
+			return CFrame.Angles(rx, ry, rz) + Vector3.new(x, y, z), c + 12 - init
 		end,
 		write = function(v: CFrame)
 			local rx, ry, rz = v:ToEulerAnglesXYZ()
 			write(v.X)
 			write(v.Y)
 			write(v.Z)
-			write(rx)
-			write(ry)
-			write(rz)
+			-- angles are always f32, T only packs the position: an integer T would round them to whole radians
+			b_f32(rx)
+			b_f32(ry)
+			b_f32(rz)
 		end,
 		__T = nil :: never,
 	}
@@ -468,11 +491,8 @@ local ref: libtypes.Schema<any?> = {
 		if not ref_list then
 			return nil, 1
 		end
-		local obtained_ref = ref_list[buffer.readu8(b, cursor)]
-		if obtained_ref == VOID then
-			obtained_ref = nil
-		end
-		return obtained_ref, 1
+		-- index 0 is nil, the writer never puts it in the list
+		return ref_list[buffer.readu8(b, cursor)], 1
 	end,
 	write = writer.reference,
 	__T = nil :: never,

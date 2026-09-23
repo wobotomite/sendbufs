@@ -20,9 +20,15 @@ end
 -- studio has no job, and its two sides spell that differently: the server reads "", the client this
 local NO_JOB = "00000000-0000-0000-0000-000000000000"
 
-return function(job_id: string): (string, string, string)
+local function names(job_id: string): (string, string, string)
 	if job_id == NO_JOB then
 		job_id = ""
 	end
 	return guid("reliable" .. job_id), guid("unreliable" .. job_id), guid("function" .. job_id)
 end
+
+return table.freeze({
+	names = names,
+	-- also hashes the definitions, so the client can check it built the same ids as the server
+	hash = guid,
+})

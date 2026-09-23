@@ -4,7 +4,7 @@ local callbacks: { [number]: libtypes.Callback } = {}
 
 local function set(id: number, cb: libtypes.Callback)
 	if callbacks[id] then
-		logger.orange(`CALLBACKS CAN ONLY BE SET ONCE! ID #{id}`)
+		logger.red(`CALLBACKS CAN ONLY BE SET ONCE! ID #{id}, THE FIRST ONE IS KEPT`)
 		return
 	end
 	callbacks[id] = cb

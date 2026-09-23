@@ -8,8 +8,8 @@ local shared = require(script["init-modules"].shared)
 export type ClientEvent<T> = libtypes.ClientRemote<T>
 export type ServerEvent<T> = libtypes.ServerRemote<T>
 
-export type ClientFunction<T> = libtypes.ClientFunction<T>
-export type ServerFunction<T> = libtypes.ServerFunction<T>
+export type ClientFunction<T = nil, O = nil> = libtypes.ClientFunction<T, O>
+export type ServerFunction<T = nil, O = nil> = libtypes.ServerFunction<T, O>
 
 export type Middleware = libtypes.Middleware
 export type Callback = libtypes.Callback
